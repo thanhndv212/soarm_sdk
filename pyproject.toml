@@ -16,6 +16,13 @@ dependencies = [
     "pyserial>=3.5",
     "streamlit>=1.38",
 ]
+
+[project.optional-dependencies]
+viser = [
+    "viser>=1.0.0",
+    "yourdfpy>=0.0.53",
+    "trimesh>=3.21",
+]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
