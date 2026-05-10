@@ -10,7 +10,6 @@ Tabs
 5. Recorder       -- record demonstration trajectories and replay them
 6. Health Monitor -- continuous thermal/current/overload monitor
 7. Config         -- export/import register snapshots; workspace validation sweep
-8. Visual Servoing -- live camera feed with ArUco marker detection
 """
 
 from __future__ import annotations
@@ -34,13 +33,6 @@ try:  # pragma: no cover
     _PLOTLY_AVAILABLE = True
 except ImportError:
     _PLOTLY_AVAILABLE = False
-
-try:  # pragma: no cover
-    import cv2  # type: ignore[import]
-    import numpy as _np  # used only in visual servoing tab
-    _CV2_AVAILABLE = True
-except ImportError:
-    _CV2_AVAILABLE = False
 
 try:  # pragma: no cover - optional dependency import guard
     import streamlit as st  # type: ignore[import]
@@ -1961,150 +1953,6 @@ def _run_sweep(
 
 
 # ---------------------------------------------------------------------------
-# Tab 9: Visual Servoing
-# ---------------------------------------------------------------------------
-
-
-def _tab_visual_servoing(device: str, baud: int) -> None:
-    """Live camera feed with ArUco marker detection and joint command panel."""
-    ss = st.session_state
-    st.header("Visual Servoing Debug")
-
-    if not _CV2_AVAILABLE:
-        st.error(
-            "OpenCV is required for this tab. "
-            "Install it with: `pip install opencv-contrib-python-headless`"
-        )
-        return
-
-    left_col, right_col = st.columns([3, 2])
-
-    with left_col:
-        st.subheader("Camera Feed")
-        cam_idx = st.number_input(
-            "Camera index", min_value=0, max_value=8, value=int(ss.get("vs_cam_idx", 0)),
-            key="vs_cam_idx_input",
-        )
-        ss["vs_cam_idx"] = cam_idx
-
-        detect_markers = st.checkbox(
-            "Detect ArUco markers", value=bool(ss.get("vs_detect", True)), key="vs_detect_cb"
-        )
-        ss["vs_detect"] = detect_markers
-
-        aruco_dict_name = st.selectbox(
-            "ArUco dictionary",
-            options=["DICT_4X4_50", "DICT_4X4_100", "DICT_5X5_50", "DICT_6X6_50"],
-            index=0,
-            key="vs_aruco_dict",
-        )
-
-        freeze = st.button("Freeze Frame", key="vs_freeze")
-        if freeze:
-            ss["vs_frozen"] = True
-        if st.button("Unfreeze", key="vs_unfreeze"):
-            ss["vs_frozen"] = False
-
-        frame_placeholder = st.empty()
-        marker_info_ph = st.empty()
-
-        if not ss.get("vs_frozen", False):
-            try:
-                cap = cv2.VideoCapture(int(cam_idx))
-                ok, frame = cap.read()
-                cap.release()
-                if not ok or frame is None:
-                    frame_placeholder.warning(f"Camera {cam_idx} not available or returned no frame.")
-                    frame = None
-                else:
-                    ss["vs_last_frame"] = frame
-            except Exception as exc:
-                frame_placeholder.error(str(exc))
-                frame = None
-        else:
-            frame = ss.get("vs_last_frame")
-            st.caption("Frame frozen")
-
-        if frame is not None:
-            display = frame.copy()
-            marker_rows: List[dict] = []
-
-            if detect_markers:
-                try:
-                    aruco_dict = cv2.aruco.getPredefinedDictionary(
-                        getattr(cv2.aruco, aruco_dict_name)
-                    )
-                    params = cv2.aruco.DetectorParameters()
-                    detector = cv2.aruco.ArucoDetector(aruco_dict, params)
-                    corners, ids, _ = detector.detectMarkers(frame)
-                    if ids is not None:
-                        cv2.aruco.drawDetectedMarkers(display, corners, ids)
-                        for i, mid in enumerate(ids.flatten()):
-                            c = corners[i][0]
-                            cx = int(c[:, 0].mean())
-                            cy = int(c[:, 1].mean())
-                            marker_rows.append({"ID": int(mid), "Center X": cx, "Center Y": cy})
-                            cv2.putText(
-                                display, f"ID {mid}",
-                                (cx - 10, cy - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2,
-                            )
-                except Exception as exc:
-                    st.caption(f"ArUco error: {exc}")
-
-            # Convert BGR -> RGB for st.image
-            rgb = cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
-            frame_placeholder.image(rgb, channels="RGB", width="stretch")
-
-            if marker_rows:
-                marker_info_ph.dataframe(
-                    pd.DataFrame(marker_rows), width="stretch", hide_index=True
-                )
-            elif detect_markers:
-                marker_info_ph.caption("No markers detected.")
-
-    with right_col:
-        st.subheader("Joint State")
-        # Show latest positions from stream history
-        hist = ss.get("stream_history", deque())
-        latest_pos: Dict[int, int] = {}
-        for row in hist:
-            latest_pos[row["id"]] = row["pos"]
-        if latest_pos:
-            for sid in sorted(latest_pos):
-                st.metric(f"J{sid} Position", f"{latest_pos[sid]} ticks")
-        else:
-            st.info("No telemetry yet. Start Live Telemetry to see joint state.")
-
-        st.subheader("Command")
-        vs_ids_raw = st.text_input("Joints to command", value="1-6", key="vs_ids")
-        st.caption("Per-joint target position (ticks)")
-        vs_cmds: Dict[int, int] = {}
-        try:
-            vs_ids = _parse_ids(vs_ids_raw)
-        except Exception:
-            vs_ids = list(SOARM100_IDS)
-        for sid in vs_ids:
-            default_pos = latest_pos.get(sid, 2048)
-            vs_cmds[sid] = st.slider(
-                f"J{sid}", 0, 4095, value=default_pos, key=f"vs_pos_{sid}"
-            )
-        vs_speed = st.number_input("Speed (ticks/s)", 50, 3000, value=300, key="vs_speed")
-        vs_acc = st.number_input("Acc", 10, 254, value=50, key="vs_acc")
-
-        if st.button("Send All Joints", type="primary", key="vs_send"):
-            try:
-                with _bus(device, baud) as srv:
-                    srv.groupSyncWrite.clearParam()
-                    for sid, pos in vs_cmds.items():
-                        srv.SyncWritePosEx(sid, pos, int(vs_speed), int(vs_acc))
-                    srv.groupSyncWrite.txPacket()
-                st.success("Commands sent.")
-            except Exception as exc:
-                st.error(str(exc))
-
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -2210,7 +2058,6 @@ def main() -> None:
             "Recorder",
             "Health",
             "Config",
-            "Visual Servoing",
         ]
     )
 
@@ -2228,8 +2075,6 @@ def main() -> None:
         _tab_health()
     with tabs[6]:
         _tab_config(device, baud, scan_range)
-    with tabs[7]:
-        _tab_visual_servoing(device, baud)
 
     # Background polling + auto-rerun loop
     _maybe_poll(device, baud)

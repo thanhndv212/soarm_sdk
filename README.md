@@ -180,7 +180,6 @@ The dashboard has 9 tabs:
 | Recorder | Record demo trajectories → CSV; replay via sync packets |
 | Health | Continuous thermal/current/overload monitor + alert log |
 | Config | Export/import register snapshots; workspace sweep; [**EEPROM Diff**](#eeprom-diff) |
-| Visual Servoing | Live camera feed, ArUco detection, joint command panel |
 
 #### GroupSyncRead Poll Optimization
 
@@ -219,26 +218,6 @@ After uploading a trajectory CSV, the tab renders an overlaid Plotly
 time-series of all joint positions before any packets are sent. A **Dry-Run
 Preview** button confirms the chart is accurate without touching the servos.
 Duration and frame-count readouts are shown above the chart.
-
-#### Visual Servoing Tab
-
-Provides a live camera debug view alongside joint state and command controls.
-
-- **Camera Feed**: captures frames from any `cv2.VideoCapture` index; frame
-  rate matches the Streamlit rerun interval.
-- **ArUco Detection**: overlay of detected marker IDs and centroid positions
-  (dictionary and parameters are configurable via the UI).
-- **Freeze Frame**: captures a single frame for annotation or export without
-  stopping the servo bus.
-- **Send All Joints**: broadcasts a sync-write packet to all commanded joints
-  directly from the tab.
-
-Requires OpenCV (already available in the `robot-irl` conda environment):
-
-```bash
-conda activate robot-irl
-python -m pip install opencv-contrib-python-headless  # if not present
-```
 
 ---
 
