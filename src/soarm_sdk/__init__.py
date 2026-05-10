@@ -1,4 +1,4 @@
-"""Public exports for the stservo-sdk package."""
+"""Public exports for the soarm-sdk package."""
 
 from .port_handler import PortHandler
 from .protocol_packet_handler import (

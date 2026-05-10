@@ -1,14 +1,15 @@
-# STServo SDK for Python
+# soarm_sdk
 
-A modernized, typed, and pip-installable wrapper around the legacy STServo
-serial SDK. This package keeps the familiar class names (`PortHandler`,
-`protocol_packet_handler`, `sts`, `scscl`, etc.) while providing a clean module
-layout that plays nicely with contemporary Python tooling.
+Python SDK for SO-ARM type manipulators driven by Feetech STS/SCS series
+serial bus servos. Provides typed, pip-installable access to the Feetech
+protocol via familiar class names (`PortHandler`, `protocol_packet_handler`,
+`sts`, `scscl`, etc.) with a clean module layout compatible with contemporary
+Python tooling.
 
 ## Installation
 
 ```bash
-pip install stservo-sdk
+pip install soarm-sdk
 ```
 
 To install from a local checkout:
@@ -20,7 +21,7 @@ pip install .
 ## Quickstart
 
 ```python
-from stservo_sdk import PortHandler, sts
+from soarm_sdk import PortHandler, sts
 
 # Create a port handler and open the serial connection
 handler = PortHandler("/dev/ttyUSB0")
@@ -80,13 +81,13 @@ python -m pip install pyserial
 
 ## Features
 
-### Unit Conversion — `stservo_sdk.conversions`
+### Unit Conversion — `soarm_sdk.conversions`
 
 Converts between raw encoder ticks (0–4095) and SI units so higher-level
 modules never have to hard-code the encoder resolution.
 
-**Implementation:** `src/stservo_sdk/conversions.py`  
-All symbols are re-exported from `stservo_sdk` at the package level.
+**Implementation:** `src/soarm_sdk/conversions.py`  
+All symbols are re-exported from `soarm_sdk` at the package level.
 
 | Function | Description |
 |---|---|
@@ -106,7 +107,7 @@ Constants:
 | `SOARM100_DIRECTION_SIGNS` | `[1,1,1,1,1,1]` | Per-joint axis sign (verify against hardware) |
 
 ```python
-from stservo_sdk.conversions import ticks_to_radians, radians_to_ticks
+from soarm_sdk.conversions import ticks_to_radians, radians_to_ticks
 
 rad = ticks_to_radians(2560)          # → ~0.8 rad
 tick = radians_to_ticks(1.57)         # → 3073
@@ -162,7 +163,7 @@ executor = MotionExecutor(robot=hw, ...)
 Launch with:
 
 ```bash
-cd stservo-sdk
+cd soarm-sdk
 conda activate robot-irl
 python -m streamlit run examples/homing_dashboard.py
 ```
@@ -197,7 +198,7 @@ status)` rows to a SQLite database in real-time.
 - **Download DB** streams the `.db` file to your browser.
 - **Query UI**: filter by servo IDs and time window, preview results as a table.
 
-Default database path: `~/.stservo_telemetry.db`
+Default database path: `~/.soarm_telemetry.db`
 
 #### EEPROM Diff (Config tab)
 

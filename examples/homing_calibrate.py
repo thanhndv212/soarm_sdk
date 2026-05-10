@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Utility script for homing and calibration of STServo actuators.
+"""Utility script for homing and calibration of soarm_sdk actuators.
 
 Features
 --------
@@ -44,7 +44,7 @@ try:
     from serial.tools import list_ports
 except ModuleNotFoundError as exc:  # pragma: no cover - import-time guard
     raise ModuleNotFoundError(
-        "The 'pyserial' package is required for STServo calibration. "
+        "The 'pyserial' package is required for soarm_sdk calibration. "
         "Install it with 'python -m pip install pyserial' using the same "
         "Python interpreter that launches this script. If you're running "
         "the Streamlit dashboard, prefer 'python -m streamlit run "
@@ -54,19 +54,19 @@ except ModuleNotFoundError as exc:  # pragma: no cover - import-time guard
 
 def _import_stservo():
     try:
-        return importlib.import_module("stservo_sdk")
+        return importlib.import_module("soarm_sdk")
     except ModuleNotFoundError:  # pragma: no cover - local source checkout
         src_root = Path(__file__).resolve().parents[1] / "src"
         if src_root.is_dir() and str(src_root) not in sys.path:
             sys.path.insert(0, str(src_root))
-        return importlib.import_module("stservo_sdk")
+        return importlib.import_module("soarm_sdk")
 
 
-_stservo_sdk = _import_stservo()
-PortHandler = _stservo_sdk.PortHandler
-sts = _stservo_sdk.sts
+_soarm_sdk = _import_stservo()
+PortHandler = _soarm_sdk.PortHandler
+sts = _soarm_sdk.sts
 
-_stservo_def = importlib.import_module("stservo_sdk.stservo_def")
+_stservo_def = importlib.import_module("soarm_sdk.stservo_def")
 COMM_SUCCESS = _stservo_def.COMM_SUCCESS
 COMM_RX_FAIL = _stservo_def.COMM_RX_FAIL
 STS_ACC = _stservo_def.STS_ACC
@@ -742,7 +742,7 @@ def write1(
 
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Calibrate STServo devices connected to a serial bus.",
+        description="Calibrate soarm_sdk devices connected to a serial bus.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -808,7 +808,7 @@ def create_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="ID:BAUD_CODE",
-        help="Set the baud-rate register (use STServo-specific encoding).",
+        help="Set the baud-rate register (use soarm_sdk-specific encoding).",
     )
     parser.add_argument(
         "--unlock",
@@ -1011,7 +1011,7 @@ def launch_ui() -> int:
         lock=defaults.lock,
     )
 
-    print("Interactive STServo calibration UI")
+    print("Interactive soarm_sdk calibration UI")
     print("---------------------------------")
 
     while True:

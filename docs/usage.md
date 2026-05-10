@@ -1,12 +1,12 @@
-# STServo SDK Usage Guide
+# soarm_sdk Usage Guide
 
-This guide highlights the most common workflows when interacting with STServo
+This guide highlights the most common workflows when interacting with soarm_sdk
 actuators using the modernized Python SDK.
 
 ## Connecting to a Servo Bus
 
 ```python
-from stservo_sdk import PortHandler
+from soarm_sdk import PortHandler
 
 handler = PortHandler("/dev/ttyUSB0")
 if not handler.openPort():
@@ -23,7 +23,7 @@ working. The implementation relies on `pyserial` under the hood.
 ## Working with STS Servos
 
 ```python
-from stservo_sdk import sts
+from soarm_sdk import sts
 
 servo = sts(handler)
 
@@ -43,7 +43,7 @@ servo.groupSyncWrite.txPacket()
 ## Working with SCSCL Servos
 
 ```python
-from stservo_sdk import scscl
+from soarm_sdk import scscl
 
 arm = scscl(handler)
 arm.WritePos(servo_id=1, position=2048, time=500, speed=100)
@@ -55,13 +55,13 @@ The original `protocol_packet_handler` class remains available for lower-level
 packet manipulations:
 
 ```python
-from stservo_sdk import protocol_packet_handler
+from soarm_sdk import protocol_packet_handler
 
 packet_handler = protocol_packet_handler(handler, protocol_end=0)
 data, result, error = packet_handler.readTxRx(1, address=40, length=2)
 ```
 
-Refer to the class docstrings in the `stservo_sdk` package for additional
+Refer to the class docstrings in the `soarm_sdk` package for additional
 methods. All modules ship with type hints and docstrings to improve IDE support
 and readability.
 
@@ -89,11 +89,11 @@ and streams live logs as the process runs.
 
 ## Unit Conversion
 
-The `stservo_sdk.conversions` module bridges raw encoder ticks and SI units so
+The `soarm_sdk.conversions` module bridges raw encoder ticks and SI units so
 higher-level code works in radians and rad/s rather than hardware register values.
 
 ```python
-from stservo_sdk.conversions import (
+from soarm_sdk.conversions import (
     ticks_to_radians,
     radians_to_ticks,
     speed_ticks_to_rad_s,
@@ -137,8 +137,8 @@ For high-frequency control loops, prefer `GroupSyncRead` over 6 separate
 all servos in one bus transaction (~6× fewer round-trips).
 
 ```python
-from stservo_sdk import PortHandler, sts
-from stservo_sdk.stservo_def import (
+from soarm_sdk import PortHandler, sts
+from soarm_sdk.stservo_def import (
     COMM_SUCCESS, STS_PRESENT_POSITION_L, STS_PRESENT_SPEED_L
 )
 

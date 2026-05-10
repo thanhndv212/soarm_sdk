@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Streamlit dashboard for STServo homing, calibration, and servo development.
+"""Streamlit dashboard for soarm_sdk homing, calibration, and servo development.
 
 Tabs
 ----
@@ -79,8 +79,8 @@ from homing_calibrate import (  # noqa: E402
 
 import importlib as _il  # noqa: E402
 
-_def = _il.import_module("stservo_sdk.stservo_def")
-from stservo_sdk import GroupSyncRead, PortHandler, sts as _Sts  # noqa: E402
+_def = _il.import_module("soarm_sdk.stservo_def")
+from soarm_sdk import GroupSyncRead, PortHandler, sts as _Sts  # noqa: E402
 
 # Additional register addresses not re-exported by homing_calibrate
 STS_OFS_L: int = _def.STS_OFS_L
@@ -351,7 +351,7 @@ def _init() -> None:
     ss.setdefault("cmd_curr_pos", {})  # {sid: ticks}
     # Telemetry DB logging
     ss.setdefault("log_to_db", False)
-    ss.setdefault("db_path", str(Path.home() / ".stservo_telemetry.db"))
+    ss.setdefault("db_path", str(Path.home() / ".soarm_telemetry.db"))
     ss.setdefault("_db_conn", None)  # sqlite3.Connection or None
 
 
@@ -1645,7 +1645,7 @@ def _tab_health() -> None:
 
     db_path_input = st.text_input(
         "Database path",
-        value=ss.get("db_path", str(Path.home() / ".stservo_telemetry.db")),
+        value=ss.get("db_path", str(Path.home() / ".soarm_telemetry.db")),
         key="db_path_input",
     )
     ss["db_path"] = db_path_input
@@ -2111,7 +2111,7 @@ def _tab_visual_servoing(device: str, baud: int) -> None:
 
 def main() -> None:
     st.set_page_config(
-        page_title="STServo Dashboard",
+        page_title="soarm_sdk Dashboard",
         layout="wide",
         initial_sidebar_state="expanded",
     )
@@ -2120,7 +2120,7 @@ def main() -> None:
 
     # Sidebar: shared connection settings
     with st.sidebar:
-        st.title("STServo Dashboard")
+        st.title("soarm_sdk Dashboard")
         st.header("Connection")
         if st.button("Refresh Ports", key="sb_refresh"):
             ss["ports"] = get_available_ports()

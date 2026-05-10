@@ -3,9 +3,9 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [project]
-name = "stservo-sdk"
+name = "soarm-sdk"
 version = "0.1.0"
-description = "Modernized Python SDK for STServo actuators"
+description = "Python SDK for SO-ARM type manipulators using Feetech STS/SCS series motors"
 readme = "README.md"
 authors = [
     { name = "Thanh Nguyen" }
@@ -25,15 +25,15 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
-keywords = ["stservo", "robotics", "actuator", "sdk"]
+keywords = ["soarm", "feetech", "sts", "scs", "robotics", "manipulator", "sdk"]
 
 [project.urls]
 Homepage = "https://github.com/thanhndv212/fullstack-manip"
-Documentation = "https://github.com/thanhndv212/fullstack-manip/tree/main/stservo-sdk/docs"
+Documentation = "https://github.com/thanhndv212/fullstack-manip/tree/main/soarm-sdk/docs"
 Source = "https://github.com/thanhndv212/fullstack-manip"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/stservo_sdk"]
+packages = ["src/soarm_sdk"]
 
 [tool.hatch.envs.default]
 dependencies = [
