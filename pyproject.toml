@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "stservo-sdk"
+version = "0.1.0"
+description = "Modernized Python SDK for STServo actuators"
+readme = "README.md"
+authors = [
+    { name = "Thanh Nguyen" }
+]
+license = { text = "MIT" }
+requires-python = ">=3.9"
+dependencies = [
+    "pyserial>=3.5",
+    "streamlit>=1.38",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+keywords = ["stservo", "robotics", "actuator", "sdk"]
+
+[project.urls]
+Homepage = "https://github.com/thanhndv212/fullstack-manip"
+Documentation = "https://github.com/thanhndv212/fullstack-manip/tree/main/stservo-sdk/docs"
+Source = "https://github.com/thanhndv212/fullstack-manip"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stservo_sdk"]
+
+[tool.hatch.envs.default]
+dependencies = [
+    "pytest>=8.2",
+]
+
+[tool.hatch.envs.lint]
+dependencies = [
+    "ruff>=0.6",
+]
+[tool.hatch.envs.lint.scripts]
+check = "ruff check src"
