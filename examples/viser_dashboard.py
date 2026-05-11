@@ -6,9 +6,9 @@ Tabs
 1. Homing Wizard  -- automatic ROM sweep or manual limit recording
 2. Command Panel  -- per-joint position / speed / acc commands + sync packet
 3. Calibration    -- scan, assign IDs, limits, acc / speed / mode / baud
-4. Telemetry      -- live position / speed table, auto-updated every 100 ms
+4. Monitor        -- live uPlot charts, joint table, health, servo inspector
 5. Recorder       -- record & replay demonstration trajectories
-6. Health Monitor -- thermal / current / status alert monitoring
+6. PID Tuning     -- read / write P / D / I gains per servo (EEPROM)
 7. Config         -- export / import register snapshots to JSON
 
 Launch
@@ -89,6 +89,9 @@ STS_STATUS: int = _def.STS_STATUS
 STS_PRESENT_CURRENT_L: int = _def.STS_PRESENT_CURRENT_L
 STS_PRESENT_POSITION_L: int = _def.STS_PRESENT_POSITION_L
 STS_PRESENT_SPEED_L: int = _def.STS_PRESENT_SPEED_L
+STS_P_COEF: int = _def.STS_P_COEF
+STS_D_COEF: int = _def.STS_D_COEF
+STS_I_COEF: int = _def.STS_I_COEF
 
 SOARM100_IDS: List[int] = [1, 2, 3, 4, 5, 6]
 SOARM100_JOINT_NAMES: List[str] = [
@@ -108,6 +111,15 @@ _DEFAULT_URDF = (
 )
 _STALL_POLL_S = 0.08
 _HEALTH_EVERY = 5  # read temp/current every Nth poll iteration
+_CHART_WINDOW = 200  # rolling history length (200 × 100 ms = 20 s)
+_CHART_COLORS = [
+    "#e74c3c",
+    "#3498db",
+    "#2ecc71",
+    "#f39c12",
+    "#9b59b6",
+    "#1abc9c",
+]
 
 # ---------------------------------------------------------------------------
 # Shared state
@@ -654,6 +666,129 @@ def _run_rom_sweep_sim(
 # ---------------------------------------------------------------------------
 
 
+def _build_tab_startup(
+    server: viser.ViserServer,
+    device_h: "viser.GuiTextHandle",
+    baud_h: "viser.GuiNumberHandle",
+    interval_h: "viser.GuiNumberHandle",
+    stop_event: threading.Event,
+    poll_ref: Dict[str, Any],
+    conn_status_md: "viser.GuiMarkdownHandle",
+) -> None:
+    """Connection, quick torque, and scan-servos in a single Start Up tab."""
+    server.gui.add_markdown("## Start Up")
+
+    # ── Connection ────────────────────────────────────────────────────────
+    with server.gui.add_folder("Connection"):
+        ports = get_available_ports()
+        port_info = (
+            "\n".join(f"- `{d}` — {desc}" for d, desc in ports)
+            if ports
+            else "*No USB serial ports detected.*"
+        )
+        server.gui.add_markdown(port_info)
+        server.gui.add_markdown(
+            "*Device / baud / interval are shared across all tabs.*"
+        )
+        connect_btn = server.gui.add_button(
+            "Connect & Start Polling", color="green"
+        )
+        disconnect_btn = server.gui.add_button("Disconnect", color="red")
+
+    # ── Quick Torque ──────────────────────────────────────────────────────
+    with server.gui.add_folder("Quick Torque"):
+        torque_ids_h = server.gui.add_text("Joint IDs", initial_value="1-6")
+        qt_on = server.gui.add_button("Torque ON", color="blue")
+        qt_off = server.gui.add_button("Torque OFF", color="red")
+        torque_status_md = server.gui.add_markdown("")
+
+    # ── Scan Servos ───────────────────────────────────────────────────────
+    with server.gui.add_folder("Scan Servos"):
+        server.gui.add_markdown(
+            "Ping every ID in the given range and list responding servos."
+        )
+        scan_range_h = server.gui.add_text(
+            "Scan range", initial_value="1-10"
+        )
+        scan_btn = server.gui.add_button("Scan", color="blue")
+        scan_md = server.gui.add_markdown("*Press Scan to discover servos.*")
+
+    # ── Callbacks ─────────────────────────────────────────────────────────
+    @connect_btn.on_click
+    def _do_connect(_: viser.GuiEvent) -> None:
+        dev = device_h.value
+        bd = int(baud_h.value)
+        ivl = float(interval_h.value) / 1000.0
+        poll_ref["interval_s"] = ivl
+        stop_event.set()
+        old = poll_ref.get("thread")
+        if old and old.is_alive():
+            old.join(timeout=2.0)
+        stop_event.clear()
+        t = threading.Thread(
+            target=_poll_loop,
+            args=(dev, bd, SOARM100_IDS, ivl, stop_event),
+            daemon=True,
+        )
+        t.start()
+        poll_ref["thread"] = t
+        conn_status_md.content = f"**Polling** `{dev}` @ {bd} baud"
+
+    @disconnect_btn.on_click
+    def _do_disconnect(_: viser.GuiEvent) -> None:
+        stop_event.set()
+        t = poll_ref.get("thread")
+        if t:
+            t.join(timeout=2.0)
+        poll_ref["thread"] = None
+        with _lock:
+            _state.connected = False
+        conn_status_md.content = "*Disconnected.*"
+
+    @qt_on.on_click
+    def _do_qt_on(_: viser.GuiEvent) -> None:
+        try:
+            ids = _parse_ids(torque_ids_h.value)
+            with _bus(device_h.value, int(baud_h.value)) as srv:
+                for sid in ids:
+                    write1(srv, sid, STS_TORQUE_ENABLE, 1, "torque on")
+            torque_status_md.content = f"Torque ON — J{ids}"
+        except Exception as exc:
+            torque_status_md.content = f"**Error**: {exc}"
+
+    @qt_off.on_click
+    def _do_qt_off(_: viser.GuiEvent) -> None:
+        try:
+            ids = _parse_ids(torque_ids_h.value)
+            with _bus(device_h.value, int(baud_h.value)) as srv:
+                for sid in ids:
+                    write1(srv, sid, STS_TORQUE_ENABLE, 0, "torque off")
+            torque_status_md.content = f"Torque OFF — J{ids}"
+        except Exception as exc:
+            torque_status_md.content = f"**Error**: {exc}"
+
+    @scan_btn.on_click
+    def _do_scan(_: viser.GuiEvent) -> None:
+        device = device_h.value
+        baud = int(baud_h.value)
+        scan_md.content = "*Scanning…*"
+        try:
+            ids = _parse_ids(scan_range_h.value)
+            found = discover_servos(device, baud, ids)
+            if found:
+                lines = ["| ID | Status |", "|----|--------|"]
+                for sid in sorted(found):
+                    lines.append(f"| {sid} | ✓ responding |")
+                scan_md.content = "\n".join(lines)
+            else:
+                scan_md.content = "**No servos found** in the scanned range."
+        except Exception as exc:
+            scan_md.content = f"**Scan error**: {exc}"
+
+
+# ---------------------------------------------------------------------------
+
+
 def _build_tab_homing(
     server: viser.ViserServer,
     device_h: "viser.GuiTextHandle",
@@ -667,28 +802,28 @@ def _build_tab_homing(
         "Calibrate servo midpoints via automatic motor sweep or manual hand movement."
     )
 
+    _OPT_AUTO = "Automatic — motor sweep"
+    _OPT_MAN = "Manual — move by hand"
+
     mode_h = server.gui.add_dropdown(
         "Mode",
-        options=["Automatic — motor sweep", "Manual — move by hand"],
-        initial_value="Automatic — motor sweep",
+        options=[_OPT_AUTO, _OPT_MAN],
+        initial_value=_OPT_AUTO,
     )
     joints_h = server.gui.add_text("Joint IDs", initial_value="1-6")
     target_ref_h = server.gui.add_number(
         "Zero reference (ticks)", initial_value=2048, min=0, max=4095, step=1
     )
 
+    # ── Automatic-mode controls ───────────────────────────────────────────
     sim_mode_h = server.gui.add_checkbox(
         "Dry-run (simulate sweep, no hardware required)",
         initial_value=False,
     )
-
-    with server.gui.add_folder("Sweep Parameters"):
+    sweep_params_folder = server.gui.add_folder("Sweep Parameters")
+    with sweep_params_folder:
         speed_h = server.gui.add_slider(
-            "Sweep speed (ticks/s)",
-            min=30,
-            max=500,
-            step=10,
-            initial_value=150,
+            "Sweep speed (ticks/s)", min=30, max=500, step=10, initial_value=150,
         )
         stall_thr_h = server.gui.add_number(
             "Stall threshold (ticks)", initial_value=5, min=1, max=50, step=1
@@ -697,39 +832,23 @@ def _build_tab_homing(
             "Stall window (samples)", initial_value=8, min=3, max=20, step=1
         )
         timeout_h = server.gui.add_number(
-            "Timeout/direction (s)",
-            initial_value=30.0,
-            min=5.0,
-            max=120.0,
-            step=1.0,
+            "Timeout/direction (s)", initial_value=30.0, min=5.0, max=120.0, step=1.0,
         )
         max_range_h = server.gui.add_number(
             "Max travel/direction (ticks, 0 = unlimited)",
-            initial_value=0,
-            min=0,
-            max=4096,
-            step=50,
+            initial_value=0, min=0, max=4096, step=50,
         )
-
     sweep_btn = server.gui.add_button("Sweep All Joints", color="green")
-    apply_btn = server.gui.add_button(
-        "Apply: Write Offsets + Limits to EEPROM", color="blue"
-    )
-    save_btn = server.gui.add_button("Save Config (soarm100_rom.json)")
-    log_md = server.gui.add_markdown("*Press Sweep or use Manual mode below.*")
 
-    # Manual mode
-    server.gui.add_markdown(
-        "---\n**Manual Mode** — disable torque, move by hand"
+    # ── Manual-mode controls ──────────────────────────────────────────────
+    man_header_md = server.gui.add_markdown(
+        "Disable torque then move each joint by hand to its limits."
     )
     torque_off_btn = server.gui.add_button("Disable Torque on Selected Joints")
-    man_status_md = server.gui.add_markdown(
-        "*No manual positions recorded yet.*"
-    )
+    man_status_md = server.gui.add_markdown("*No manual positions recorded yet.*")
     man_compute_btn = server.gui.add_button(
         "Compute from Recorded Limits", color="blue"
     )
-
     man_positions: Dict[int, Dict[str, Optional[int]]] = {
         sid: {"min": None, "max": None} for sid in SOARM100_IDS
     }
@@ -738,6 +857,36 @@ def _build_tab_homing(
     for sid in SOARM100_IDS:
         man_min_btns[sid] = server.gui.add_button(f"Record Min J{sid}")
         man_max_btns[sid] = server.gui.add_button(f"Record Max J{sid}")
+
+    # ── Shared apply/save controls ─────────────────────────────────────────
+    apply_btn = server.gui.add_button(
+        "Apply: Write Offsets + Limits to EEPROM", color="blue"
+    )
+    save_btn = server.gui.add_button("Save Config (soarm100_rom.json)")
+    log_md = server.gui.add_markdown("*Select a mode and proceed.*")
+
+    # ── Mode visibility helper ─────────────────────────────────────────────
+    _auto_controls = [
+        sim_mode_h, sweep_params_folder, sweep_btn,
+    ]
+    _man_controls = [
+        man_header_md, torque_off_btn, man_status_md, man_compute_btn,
+        *man_min_btns.values(), *man_max_btns.values(),
+    ]
+
+    def _apply_visibility(selected: str) -> None:
+        is_auto = selected == _OPT_AUTO
+        for h in _auto_controls:
+            h.visible = is_auto
+        for h in _man_controls:
+            h.visible = not is_auto
+
+    # Set initial state
+    _apply_visibility(mode_h.value)
+
+    @mode_h.on_update
+    def _on_mode_change(ev: viser.GuiEvent) -> None:
+        _apply_visibility(mode_h.value)
 
     # Shared results store
     rom_results: Dict[int, dict] = {}
@@ -1121,58 +1270,61 @@ def _build_tab_command(
 # ---------------------------------------------------------------------------
 
 
-def _build_tab_calibration(
+def _build_tab_reconfigure(
     server: viser.ViserServer,
     device_h: "viser.GuiTextHandle",
     baud_h: "viser.GuiNumberHandle",
 ) -> None:
-    server.gui.add_markdown("## Calibration")
-    server.gui.add_markdown(
+    server.gui.add_markdown("## Reconfigure")
+
+    # ── Calibration ───────────────────────────────────────────────────────
+    with server.gui.add_folder("Calibration"):
+     server.gui.add_markdown(
         "Configure servo IDs, angle limits, acceleration, speed, "
         "mode, torque, and baud rate in a single run."
-    )
+     )
 
-    scan_range_h = server.gui.add_text("Scan range", initial_value="1-10")
-    unlock_h = server.gui.add_checkbox(
-        "Unlock EEPROM before changes", initial_value=False
-    )
-    lock_h = server.gui.add_checkbox(
-        "Lock EEPROM after changes", initial_value=True
-    )
+     scan_range_h = server.gui.add_text("Scan range", initial_value="1-10")
+     unlock_h = server.gui.add_checkbox(
+         "Unlock EEPROM before changes", initial_value=False
+     )
+     lock_h = server.gui.add_checkbox(
+         "Lock EEPROM after changes", initial_value=True
+     )
 
-    with server.gui.add_folder("ID Remapping (OLD:NEW per line)"):
-        assign_h = server.gui.add_text(
-            "Assign IDs", initial_value="", multiline=True, hint="1:11\n2:12"
-        )
-    with server.gui.add_folder("Angle Limits (ID:MIN:MAX per line)"):
-        angle_h = server.gui.add_text(
-            "Angle limits",
-            initial_value="",
-            multiline=True,
-            hint="1:512:3584",
-        )
-    with server.gui.add_folder("Motion Parameters"):
-        acc_h = server.gui.add_text(
-            "Acceleration (ID:ACC)", initial_value="", multiline=True
-        )
-        speed_h = server.gui.add_text(
-            "Speed (ID:SPEED)", initial_value="", multiline=True
-        )
-    with server.gui.add_folder("Mode & Torque"):
-        torque_h = server.gui.add_text(
-            "Torque (ID:on/off)", initial_value="", multiline=True
-        )
-        mode_h = server.gui.add_text(
-            "Mode (ID:0/1  0=servo, 1=wheel)", initial_value="", multiline=True
-        )
-        baud_map_h = server.gui.add_text(
-            "Baud code (ID:CODE)", initial_value="", multiline=True
-        )
+     with server.gui.add_folder("ID Remapping (OLD:NEW per line)"):
+         assign_h = server.gui.add_text(
+             "Assign IDs", initial_value="", multiline=True, hint="1:11\n2:12"
+         )
+     with server.gui.add_folder("Angle Limits (ID:MIN:MAX per line)"):
+         angle_h = server.gui.add_text(
+             "Angle limits",
+             initial_value="",
+             multiline=True,
+             hint="1:512:3584",
+         )
+     with server.gui.add_folder("Motion Parameters"):
+         acc_h = server.gui.add_text(
+             "Acceleration (ID:ACC)", initial_value="", multiline=True
+         )
+         speed_h = server.gui.add_text(
+             "Speed (ID:SPEED)", initial_value="", multiline=True
+         )
+     with server.gui.add_folder("Mode & Torque"):
+         torque_h = server.gui.add_text(
+             "Torque (ID:on/off)", initial_value="", multiline=True
+         )
+         mode_h = server.gui.add_text(
+             "Mode (ID:0/1  0=servo, 1=wheel)", initial_value="", multiline=True
+         )
+         baud_map_h = server.gui.add_text(
+             "Baud code (ID:CODE)", initial_value="", multiline=True
+         )
 
-    run_btn = server.gui.add_button("Run Calibration", color="green")
-    log_md = server.gui.add_markdown(
-        "*Fill in the fields above and press Run.*"
-    )
+     run_btn = server.gui.add_button("Run Calibration", color="green")
+     cal_log_md = server.gui.add_markdown(
+         "*Fill in the fields above and press Run.*"
+     )
 
     def _parse_text_lines(raw: str) -> List[str]:
         return [s.strip() for s in raw.splitlines() if s.strip()]
@@ -1207,22 +1359,210 @@ def _build_tab_calibration(
             exit_code = 1
 
         status = "✓ Complete" if exit_code == 0 else "✗ Non-zero exit"
-        log_md.content = f"**{status}**\n```\n" + "\n".join(log_buf) + "\n```"
+        cal_log_md.content = (
+            f"**{status}**\n```\n" + "\n".join(log_buf) + "\n```"
+        )
+
+    # ── Config export / import ────────────────────────────────────────────
+    with server.gui.add_folder("Config Export / Import"):
+        server.gui.add_markdown(
+            "Save and restore the full register state of soarm100 servos as JSON."
+        )
+        with server.gui.add_folder("Export"):
+            export_ids_h = server.gui.add_text(
+                "IDs to export", initial_value="1-6"
+            )
+            export_path_h = server.gui.add_text(
+                "Output file", initial_value="soarm100_config.json"
+            )
+            export_btn = server.gui.add_button("Read & Export", color="green")
+
+        with server.gui.add_folder("Import"):
+            import_path_h = server.gui.add_text(
+                "JSON file to apply", initial_value="soarm100_config.json"
+            )
+            import_btn = server.gui.add_button(
+                "Apply Config from File", color="blue"
+            )
+
+        cfg_log_md = server.gui.add_markdown("*Use Export or Import above.*")
+
+    @export_btn.on_click
+    def _do_export(_: viser.GuiEvent) -> None:
+        device = device_h.value
+        baud = int(baud_h.value)
+        try:
+            ids = _parse_ids(export_ids_h.value)
+            diag = read_servo_diagnostics(device, baud, ids)
+            snapshot: Dict[str, Any] = {
+                "exported_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "device": device,
+                "servos": {},
+            }
+            for sid_e, data in diag.items():
+                entry = {
+                    k: v for k, v in (data or {}).items() if k != "_errors"
+                }
+                snapshot["servos"][str(sid_e)] = entry
+            out_path = Path(export_path_h.value)
+            out_path.write_text(json.dumps(snapshot, indent=2))
+            cfg_log_md.content = (
+                f"**Exported** {len(diag)} servo(s) → `{out_path.resolve()}`"
+            )
+        except Exception as exc:
+            cfg_log_md.content = f"**Export error**: {exc}"
+
+    @import_btn.on_click
+    def _do_import(_: viser.GuiEvent) -> None:
+        device = device_h.value
+        baud = int(baud_h.value)
+        try:
+            snap = json.loads(Path(import_path_h.value).read_text())
+            servos = snap.get("servos", {})
+            log_lines: List[str] = []
+            with _bus(device, baud) as srv:
+                for sid_str, entry in servos.items():
+                    sid_i = int(sid_str)
+                    write1(srv, sid_i, STS_LOCK, 0, "unlock")
+                    acc_val = entry.get("Acceleration")
+                    if acc_val is not None:
+                        write1(srv, sid_i, STS_ACC, int(acc_val), "acc")
+                        log_lines.append(f"J{sid_i}: ACC={acc_val}")
+                    mode_val = entry.get("Mode")
+                    if mode_val is not None:
+                        write1(srv, sid_i, STS_MODE, int(mode_val), "mode")
+                        log_lines.append(f"J{sid_i}: MODE={mode_val}")
+                    write1(srv, sid_i, STS_LOCK, 1, "lock")
+            log_lines.append("Done.")
+            cfg_log_md.content = (
+                "**Import complete.**\n```\n" + "\n".join(log_lines) + "\n```"
+            )
+        except Exception as exc:
+            cfg_log_md.content = f"**Import error**: {exc}"
 
 
 # ---------------------------------------------------------------------------
 
 
-def _build_tab_telemetry(
+def _build_tab_monitor(
     server: viser.ViserServer,
-) -> "viser.GuiMarkdownHandle":
-    server.gui.add_markdown("## Live Telemetry")
-    server.gui.add_markdown(
-        "Position, speed, temperature, and current for all joints. "
-        "Updates automatically at ~10 Hz while polling is active."
-    )
-    telem_md = server.gui.add_markdown("*Waiting for hardware data…*")
-    return telem_md
+    device_h: "viser.GuiTextHandle",
+    baud_h: "viser.GuiNumberHandle",
+    chart_window: int = _CHART_WINDOW,
+) -> "tuple[viser.GuiMarkdownHandle, Any, Any, viser.GuiMarkdownHandle]":
+    """Combined Monitor tab: live charts + table, health, and servo inspector."""
+    import viser.uplot as _uplot  # local import — optional dep
+
+    # ── Live charts ───────────────────────────────────────────────────────
+    server.gui.add_markdown("## Monitor")
+
+    with server.gui.add_folder("Live Position & Speed"):
+        _init_t = np.linspace(0.0, chart_window * 0.1, chart_window)
+        _zeros = np.zeros(chart_window)
+
+        pos_chart = server.gui.add_uplot(
+            data=(_init_t, *[_zeros.copy() for _ in SOARM100_IDS]),
+            series=(
+                _uplot.Series(label="time"),
+                *[
+                    _uplot.Series(
+                        label=f"J{sid}", stroke=_CHART_COLORS[i], width=2
+                    )
+                    for i, sid in enumerate(SOARM100_IDS)
+                ],
+            ),
+            title="Position (ticks)",
+            axes=(
+                _uplot.Axis(label="time (s)"),
+                _uplot.Axis(label="ticks", side=3),
+            ),
+            legend=_uplot.Legend(show=True),
+            aspect=2.5,
+        )
+        spd_chart = server.gui.add_uplot(
+            data=(_init_t, *[_zeros.copy() for _ in SOARM100_IDS]),
+            series=(
+                _uplot.Series(label="time"),
+                *[
+                    _uplot.Series(
+                        label=f"J{sid}", stroke=_CHART_COLORS[i], width=2
+                    )
+                    for i, sid in enumerate(SOARM100_IDS)
+                ],
+            ),
+            title="Speed (ticks/s)",
+            axes=(
+                _uplot.Axis(label="time (s)"),
+                _uplot.Axis(label="ticks/s", side=3),
+            ),
+            legend=_uplot.Legend(show=True),
+            aspect=2.5,
+        )
+        telem_md = server.gui.add_markdown("*Waiting for hardware data…*")
+
+    # ── Health ────────────────────────────────────────────────────────────
+    with server.gui.add_folder("Health (temp / current)"):
+        server.gui.add_markdown(
+            "Sampled every 5 poll cycles (~1 s at 200 ms interval)."
+        )
+        health_md = server.gui.add_markdown("*Waiting for hardware data…*")
+
+    # ── Inspector ─────────────────────────────────────────────────────────
+    with server.gui.add_folder("Servo Inspector"):
+        server.gui.add_markdown(
+            "Full register snapshot: position, speed, load, voltage, "
+            "current, temperature, mode, acceleration, correction, status."
+        )
+        sid_h = server.gui.add_number(
+            "Servo ID", initial_value=1, min=1, max=253, step=1
+        )
+        read_btn = server.gui.add_button("Read Registers", color="blue")
+        insp_html = server.gui.add_html(
+            "<i>Select a servo ID and press Read.</i>"
+        )
+
+    def _diag_to_html(sid: int, details: Dict[str, Any]) -> str:
+        errors: Dict[str, Any] = (
+            details.pop("_errors", {}) if "_errors" in details else {}
+        )
+        rows = ""
+        for label, value in details.items():
+            err_flag = " ⚠" if label in errors else ""
+            val_str = "—" if value is None else str(value)
+            bg = " style='background:#fff3cd'" if label in errors else ""
+            rows += (
+                f"<tr{bg}><td style='padding:3px 8px;font-weight:600'>"
+                f"{label}{err_flag}</td>"
+                f"<td style='padding:3px 8px'>{val_str}</td></tr>"
+            )
+        return (
+            f"<b>Servo J{sid}</b>"
+            f"<table style='font-size:12px;width:100%;border-collapse:collapse'>"
+            f"<tr style='background:#eee'>"
+            f"<th style='padding:3px 8px;text-align:left'>Register</th>"
+            f"<th style='padding:3px 8px;text-align:left'>Value</th></tr>"
+            f"{rows}</table>"
+        )
+
+    @read_btn.on_click
+    def _do_read(_: viser.GuiEvent) -> None:
+        device = device_h.value
+        baud = int(baud_h.value)
+        sid = int(sid_h.value)
+        insp_html.content = f"<i>Reading J{sid}…</i>"
+        try:
+            diag = read_servo_diagnostics(device, baud, [sid])
+            details = dict(diag.get(sid, {}))
+            if not details:
+                insp_html.content = f"<b>No response from J{sid}.</b>"
+                return
+            insp_html.content = _diag_to_html(sid, details)
+        except Exception as exc:
+            insp_html.content = (
+                f"<b style='color:red'>Error reading J{sid}: {exc}</b>"
+            )
+
+    return telem_md, pos_chart, spd_chart, health_md
 
 
 # ---------------------------------------------------------------------------
@@ -1356,100 +1696,107 @@ def _build_tab_recorder(
 # ---------------------------------------------------------------------------
 
 
-def _build_tab_health(server: viser.ViserServer) -> "viser.GuiMarkdownHandle":
-    server.gui.add_markdown("## Health Monitor")
-    server.gui.add_markdown(
-        "Temperature and current for all joints. "
-        "Sampled every 5 poll cycles (approx. once per second at 200 ms interval)."
-    )
-    health_md = server.gui.add_markdown("*Waiting for hardware data…*")
-    return health_md
-
-
-# ---------------------------------------------------------------------------
-
-
-def _build_tab_config(
+def _build_tab_pid(
     server: viser.ViserServer,
     device_h: "viser.GuiTextHandle",
     baud_h: "viser.GuiNumberHandle",
 ) -> None:
-    server.gui.add_markdown("## Configuration Export / Import")
+    """PID gain tuning for STS3215 servos.
+
+    Gains are stored in EEPROM (addresses 21–23). Writing requires an
+    EEPROM unlock (STS_LOCK=0) and a subsequent lock (STS_LOCK=1).
+    Values are 8-bit unsigned integers (0–254).
+    """
+    server.gui.add_markdown("## PID Gain Tuning")
     server.gui.add_markdown(
-        "Save and restore the full register state of soarm100 servos as JSON."
+        "Read and write the **P / D / I** coefficients stored in EEPROM.  \n"
+        "Typical defaults: P=32, D=32, I=0.  \n"
+        "⚠ Writing modifies EEPROM — changes persist after power-off."
     )
 
-    with server.gui.add_folder("Export"):
-        export_ids_h = server.gui.add_text(
-            "IDs to export", initial_value="1-6"
-        )
-        export_path_h = server.gui.add_text(
-            "Output file", initial_value="soarm100_config.json"
-        )
-        export_btn = server.gui.add_button("Read & Export", color="green")
+    servo_id_h = server.gui.add_number(
+        "Servo ID", initial_value=1, min=1, max=253, step=1
+    )
 
-    with server.gui.add_folder("Import"):
-        import_path_h = server.gui.add_text(
-            "JSON file to apply", initial_value="soarm100_config.json"
+    with server.gui.add_folder("Current gains (read from hardware)"):
+        read_p_md = server.gui.add_markdown("P: —")
+        read_d_md = server.gui.add_markdown("D: —")
+        read_i_md = server.gui.add_markdown("I: —")
+
+    read_btn = server.gui.add_button("Read Gains", color="blue")
+
+    with server.gui.add_folder("New gains to write"):
+        new_p_h = server.gui.add_number(
+            "P (proportional)", initial_value=32, min=0, max=254, step=1
         )
-        import_btn = server.gui.add_button(
-            "Apply Config from File", color="blue"
+        new_d_h = server.gui.add_number(
+            "D (derivative)", initial_value=32, min=0, max=254, step=1
+        )
+        new_i_h = server.gui.add_number(
+            "I (integral)", initial_value=0, min=0, max=254, step=1
         )
 
-    log_md = server.gui.add_markdown("*Use Export or Import above.*")
+    write_pid_btn = server.gui.add_button("Write Gains to EEPROM", color="red")
+    pid_log_md = server.gui.add_markdown("*Select a servo and press Read.*")
 
-    @export_btn.on_click
-    def _do_export(_: viser.GuiEvent) -> None:
+    @read_btn.on_click
+    def _do_read(_: viser.GuiEvent) -> None:
         device = device_h.value
         baud = int(baud_h.value)
+        sid = int(servo_id_h.value)
         try:
-            ids = _parse_ids(export_ids_h.value)
-            diag = read_servo_diagnostics(device, baud, ids)
-            snapshot: Dict[str, Any] = {
-                "exported_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                "device": device,
-                "servos": {},
-            }
-            for sid_e, data in diag.items():
-                entry = {
-                    k: v for k, v in (data or {}).items() if k != "_errors"
-                }
-                snapshot["servos"][str(sid_e)] = entry
-            out_path = Path(export_path_h.value)
-            out_path.write_text(json.dumps(snapshot, indent=2))
-            log_md.content = (
-                f"**Exported** {len(diag)} servo(s) → `{out_path.resolve()}`"
-            )
-        except Exception as exc:
-            log_md.content = f"**Export error**: {exc}"
-
-    @import_btn.on_click
-    def _do_import(_: viser.GuiEvent) -> None:
-        device = device_h.value
-        baud = int(baud_h.value)
-        try:
-            snap = json.loads(Path(import_path_h.value).read_text())
-            servos = snap.get("servos", {})
-            log_lines: List[str] = []
             with _bus(device, baud) as srv:
-                for sid_str, entry in servos.items():
-                    sid_i = int(sid_str)
-                    write1(srv, sid_i, STS_LOCK, 0, "unlock")
-                    acc_val = entry.get("Acceleration")
-                    if acc_val is not None:
-                        write1(srv, sid_i, STS_ACC, int(acc_val), "acc")
-                        log_lines.append(f"J{sid_i}: ACC={acc_val}")
-                    mode_val = entry.get("Mode")
-                    if mode_val is not None:
-                        write1(srv, sid_i, STS_MODE, int(mode_val), "mode")
-                        log_lines.append(f"J{sid_i}: MODE={mode_val}")
-                    write1(srv, sid_i, STS_LOCK, 1, "lock")
-            log_lines.append("Done.")
-            log_md.content = (
-                "**Import complete.**\n```\n" + "\n".join(log_lines) + "\n```"
+
+                def _read1(addr: int, label: str) -> Optional[int]:
+                    val, result, _ = srv.read1ByteTxRx(sid, addr)
+                    if result != COMM_SUCCESS:
+                        raise IOError(f"Read {label} failed (result={result})")
+                    return val
+
+                p_val = _read1(STS_P_COEF, "P")
+                d_val = _read1(STS_D_COEF, "D")
+                i_val = _read1(STS_I_COEF, "I")
+
+            read_p_md.content = f"**P:** {p_val}"
+            read_d_md.content = f"**D:** {d_val}"
+            read_i_md.content = f"**I:** {i_val}"
+            # Pre-fill write fields for convenience
+            new_p_h.value = float(p_val)  # type: ignore[assignment]
+            new_d_h.value = float(d_val)  # type: ignore[assignment]
+            new_i_h.value = float(i_val)  # type: ignore[assignment]
+            pid_log_md.content = (
+                f"**Read OK** — J{sid}: P={p_val}  D={d_val}  I={i_val}"
             )
         except Exception as exc:
-            log_md.content = f"**Import error**: {exc}"
+            pid_log_md.content = f"**Read error (J{sid}):** {exc}"
+
+    @write_pid_btn.on_click
+    def _do_write(_: viser.GuiEvent) -> None:
+        device = device_h.value
+        baud = int(baud_h.value)
+        sid = int(servo_id_h.value)
+        p = int(new_p_h.value)
+        d = int(new_d_h.value)
+        i = int(new_i_h.value)
+        try:
+            with _bus(device, baud) as srv:
+                write1(srv, sid, STS_LOCK, 0, "unlock EEPROM")
+                write1(srv, sid, STS_P_COEF, p, "P gain")
+                write1(srv, sid, STS_D_COEF, d, "D gain")
+                write1(srv, sid, STS_I_COEF, i, "I gain")
+                write1(srv, sid, STS_LOCK, 1, "lock EEPROM")
+            # Refresh displayed values
+            read_p_md.content = f"**P:** {p}"
+            read_d_md.content = f"**D:** {d}"
+            read_i_md.content = f"**I:** {i}"
+            pid_log_md.content = (
+                f"**Write OK** — J{sid}: P={p}  D={d}  I={i} (saved to EEPROM)"
+            )
+        except Exception as exc:
+            pid_log_md.content = f"**Write error (J{sid}):** {exc}"
+
+
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -1503,18 +1850,9 @@ def main() -> None:
         "interval_s": args.interval_ms / 1000.0,
     }
 
-    # ── Sidebar controls ──────────────────────────────────────────────────
+    # ── Sidebar: shared settings only ────────────────────────────────────
     server.gui.add_markdown("# soarm_sdk Dashboard")
     server.gui.add_markdown("---")
-    server.gui.add_markdown("## Connection")
-
-    ports = get_available_ports()
-    port_info = (
-        "\n".join(f"- `{d}` — {desc}" for d, desc in ports)
-        if ports
-        else "*No USB serial ports detected.*"
-    )
-    server.gui.add_markdown(port_info)
 
     device_h = server.gui.add_text("Serial device", initial_value=device)
     baud_h = server.gui.add_number(
@@ -1531,70 +1869,7 @@ def main() -> None:
         max=2000,
         step=50,
     )
-    connect_btn = server.gui.add_button(
-        "Connect & Start Polling", color="green"
-    )
-    disconnect_btn = server.gui.add_button("Disconnect", color="red")
     conn_status_md = server.gui.add_markdown("*Not connected.*")
-
-    server.gui.add_markdown("---")
-    server.gui.add_markdown("## Quick Torque")
-    torque_ids_h = server.gui.add_text("Joint IDs", initial_value="1-6")
-    qt_on = server.gui.add_button("Torque ON")
-    qt_off = server.gui.add_button("Torque OFF")
-
-    @connect_btn.on_click
-    def _do_connect(_: viser.GuiEvent) -> None:
-        dev = device_h.value
-        bd = int(baud_h.value)
-        ivl = float(interval_h.value) / 1000.0
-        poll_ref["interval_s"] = ivl
-        stop_event.set()
-        old = poll_ref.get("thread")
-        if old and old.is_alive():
-            old.join(timeout=2.0)
-        stop_event.clear()
-        t = threading.Thread(
-            target=_poll_loop,
-            args=(dev, bd, SOARM100_IDS, ivl, stop_event),
-            daemon=True,
-        )
-        t.start()
-        poll_ref["thread"] = t
-        conn_status_md.content = f"**Polling** `{dev}` @ {bd} baud"
-
-    @disconnect_btn.on_click
-    def _do_disconnect(_: viser.GuiEvent) -> None:
-        stop_event.set()
-        t = poll_ref.get("thread")
-        if t:
-            t.join(timeout=2.0)
-        poll_ref["thread"] = None
-        with _lock:
-            _state.connected = False
-        conn_status_md.content = "*Disconnected.*"
-
-    @qt_on.on_click
-    def _sidebar_ton(_: viser.GuiEvent) -> None:
-        try:
-            ids = _parse_ids(torque_ids_h.value)
-            with _bus(device_h.value, int(baud_h.value)) as srv:
-                for sid in ids:
-                    write1(srv, sid, STS_TORQUE_ENABLE, 1, "torque on")
-            conn_status_md.content = f"Torque ON — J{ids}"
-        except Exception as exc:
-            conn_status_md.content = f"**Error**: {exc}"
-
-    @qt_off.on_click
-    def _sidebar_toff(_: viser.GuiEvent) -> None:
-        try:
-            ids = _parse_ids(torque_ids_h.value)
-            with _bus(device_h.value, int(baud_h.value)) as srv:
-                for sid in ids:
-                    write1(srv, sid, STS_TORQUE_ENABLE, 0, "torque off")
-            conn_status_md.content = f"Torque OFF — J{ids}"
-        except Exception as exc:
-            conn_status_md.content = f"**Error**: {exc}"
 
     # ── Tab layout ────────────────────────────────────────────────────────
     tab_group = server.gui.add_tab_group()
@@ -1609,30 +1884,49 @@ def main() -> None:
     else:
         _fk_cb = None  # type: ignore[assignment]
 
+    with tab_group.add_tab("Start Up"):
+        _build_tab_startup(
+            server, device_h, baud_h, interval_h,
+            stop_event, poll_ref, conn_status_md,
+        )
+
     with tab_group.add_tab("Homing Wizard"):
         _build_tab_homing(server, device_h, baud_h, stop_event, poll_ref, fk_update_fn=_fk_cb)
+
+    with tab_group.add_tab("PID Tuning"):
+        _build_tab_pid(server, device_h, baud_h)
 
     with tab_group.add_tab("Command Panel"):
         _build_tab_command(server, device_h, baud_h)
 
-    with tab_group.add_tab("Calibration"):
-        _build_tab_calibration(server, device_h, baud_h)
-
-    with tab_group.add_tab("Telemetry"):
-        telem_md = _build_tab_telemetry(server)
-
     with tab_group.add_tab("Recorder"):
         _build_tab_recorder(server, device_h, baud_h)
 
-    with tab_group.add_tab("Health"):
-        health_md = _build_tab_health(server)
+    with tab_group.add_tab("Monitor"):
+        telem_md, pos_chart, spd_chart, health_md = _build_tab_monitor(
+            server, device_h, baud_h
+        )
 
-    with tab_group.add_tab("Config"):
-        _build_tab_config(server, device_h, baud_h)
+    with tab_group.add_tab("Reconfigure"):
+        _build_tab_reconfigure(server, device_h, baud_h)
 
     print(
         f"[viser_dashboard] Open http://localhost:{args.port} in your browser."
     )
+
+    # ── Rolling chart buffers ─────────────────────────────────────────────
+    _t0 = time.monotonic()
+    _t_buf: deque = deque(
+        [float(i) * 0.1 for i in range(_CHART_WINDOW)], maxlen=_CHART_WINDOW
+    )
+    _pos_bufs: Dict[int, deque] = {
+        sid: deque([0.0] * _CHART_WINDOW, maxlen=_CHART_WINDOW)
+        for sid in SOARM100_IDS
+    }
+    _spd_bufs: Dict[int, deque] = {
+        sid: deque([0.0] * _CHART_WINDOW, maxlen=_CHART_WINDOW)
+        for sid in SOARM100_IDS
+    }
 
     # ── Display / FK update loop ──────────────────────────────────────────
     # The main thread acts as the display refresh loop: snapshots shared state
@@ -1655,6 +1949,28 @@ def main() -> None:
 
             telem_md.content = _format_telem_md(snap)
             health_md.content = _format_health_md(snap)
+
+            # ── Update rolling chart buffers ──────────────────────────────
+            now = time.monotonic() - _t0
+            _t_buf.append(now)
+            for sid in SOARM100_IDS:
+                _pos_bufs[sid].append(float(snap.positions.get(sid) or 0))
+                _spd_bufs[sid].append(float(snap.speeds.get(sid) or 0))
+            t_arr = np.array(_t_buf, dtype=np.float64)
+            pos_chart.data = (
+                t_arr,
+                *[
+                    np.array(_pos_bufs[sid], dtype=np.float64)
+                    for sid in SOARM100_IDS
+                ],
+            )
+            spd_chart.data = (
+                t_arr,
+                *[
+                    np.array(_spd_bufs[sid], dtype=np.float64)
+                    for sid in SOARM100_IDS
+                ],
+            )
 
             if (
                 urdf is not None
