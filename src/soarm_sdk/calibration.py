@@ -471,7 +471,7 @@ def run_calibration(
     ----------
     args:
         Parsed :class:`argparse.Namespace` as produced by the
-        ``homing_calibrate.py`` CLI parser.
+        ``calibrate.py`` CLI parser.
     log:
         Progress message callable. Defaults to :func:`print`.
 
@@ -480,6 +480,7 @@ def run_calibration(
     int
         ``0`` on success.
     """
+
     logger = log or print
     if getattr(args, "list_ports", False):
         from .bus import print_ports

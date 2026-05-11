@@ -12,7 +12,7 @@ Features
 Example
 -------
 ```bash
-python homing_calibrate.py \
+python calibrate.py \
     --device /dev/ttyUSB0 --scan-range 1-6 \
     --assign-id 1:11 --assign-id 2:12 \
     --angle-limit 11:100:4000 --angle-limit 12:200:3800 \

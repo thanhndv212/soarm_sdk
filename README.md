@@ -50,7 +50,7 @@ package. For instance, the homing and calibration helper can be invoked from a
 fresh source checkout without installing the project:
 
 ```bash
-python examples/homing_calibrate.py --help
+python examples/calibrate.py --help
 ```
 
 The script automatically adds the local `src/` directory to `PYTHONPATH` when
@@ -62,7 +62,7 @@ Launch the interactive text UI if you prefer guided prompts instead of CLI
 flags:
 
 ```bash
-python examples/homing_calibrate.py --ui
+python examples/calibrate.py --ui
 ```
 
 Prefer a dashboard? Start the Streamlit interface (note the `python -m` so
