@@ -65,18 +65,26 @@ flags:
 python examples/calibrate.py --ui
 ```
 
-Prefer a dashboard? Start the Streamlit interface (note the `python -m` so
-Streamlit uses the same interpreter environment as your calibration tools):
+Prefer a full dashboard? Start the Viser-based interface:
 
 ```bash
-python -m streamlit run examples/homing_dashboard.py
+python examples/viser_dashboard.py
 ```
 
-If Streamlit reports that `serial` (pyserial) is missing, install it into the
-same environment you used above:
+Optional arguments:
+
+```
+--device /dev/ttyXXX   Serial port (auto-detected if omitted)
+--baud 1000000         Baud rate (default 1 000 000)
+--port 8080            Viser HTTP port
+--urdf PATH            URDF for 3-D FK visualisation
+--interval-ms 200      Background polling interval
+```
+
+The dashboard requires the `viser` extra:
 
 ```bash
-python -m pip install pyserial
+pip install soarm-sdk[viser]
 ```
 
 ## Features
@@ -158,66 +166,87 @@ executor = MotionExecutor(robot=hw, ...)
 
 ---
 
-### Dashboard — `examples/homing_dashboard.py`
+### Dashboard — `examples/viser_dashboard.py`
 
-Launch with:
+A browser-based control panel built on [Viser](https://viser.studio) with
+real-time 3-D forward-kinematics visualisation. The server starts on
+`http://localhost:8080` by default.
 
 ```bash
-cd soarm-sdk
-conda activate robot-irl
-python -m streamlit run examples/homing_dashboard.py
+python examples/viser_dashboard.py --device /dev/ttyUSB0
 ```
 
-The dashboard has 9 tabs:
+The dashboard has 7 tabs:
 
-| Tab | Feature |
+| Tab | Description |
 |---|---|
-| Calibration | Scan, assign IDs, set limits/acc/speed/mode/torque/baud |
-| Inspector | Full telemetry snapshot for selected servos |
-| Live Telemetry | Real-time position & speed charts (configurable Hz) |
-| Command | Per-joint sliders; servo & wheel mode; sync-write |
-| Homing Wizard | 6-step guided zero-calibration + offset fine-tuning |
-| Recorder | Record demo trajectories → CSV; replay via sync packets |
-| Health | Continuous thermal/current/overload monitor + alert log |
-| Config | Export/import register snapshots; workspace sweep; [**EEPROM Diff**](#eeprom-diff) |
+| **Start Up** | Connect / disconnect polling thread; quick torque on/off; scan servos by ID range |
+| **Homing Wizard** | Automatic motor-sweep ROM detection or manual hand-teach; write offsets + angle limits to EEPROM; save `soarm100_rom.json` |
+| **PID Tuning** | Read / write P / D / I gains (EEPROM); step-response chart with live 20 Hz position trace and automatic metrics |
+| **Command Panel** | Per-joint position / speed / acceleration sliders; servo and wheel mode; sync-write to all joints |
+| **Recorder** | Record joint trajectories from hardware to CSV; replay at configurable speed and loop count |
+| **Monitor** | 20 s rolling uPlot charts (position + speed); joint telemetry table; health (temp / current); full register inspector |
+| **Reconfigure** | Calibration: scan, assign IDs, angle limits, acc/speed/mode/torque/baud; Config: export/import register snapshots as JSON |
 
-#### GroupSyncRead Poll Optimization
+Shared sidebar controls (visible across all tabs): serial device, baud rate,
+polling interval, and connection status.
 
-`_maybe_poll` now issues a single `GroupSyncRead.txRxPacket()` that returns
-position + speed for all monitored joints in one bus transaction, then extracts
-per-joint values with `gsr.getData()`. This replaces the previous per-servo
-`ReadPosSpeed` loop and reduces round-trips by ~6× at 50 Hz.
+#### 3-D FK Visualisation
 
-#### Persistent Telemetry Log (Health tab)
+When a URDF is available (default: `SO-ARM100/Simulation/SO100/so100.urdf`)
+all link meshes are loaded into the Viser 3-D scene and updated at ~3 Hz from
+the live encoder positions. FK is computed with `yourdfpy` + `trimesh`.
 
-Logs `(timestamp, servo_id, position, speed, temperature, current, voltage,
-status)` rows to a SQLite database in real-time.
+Install the optional dependencies:
 
-- **Start Logging** / **Stop Logging** toggle; database path is configurable.
-- **Download DB** streams the `.db` file to your browser.
-- **Query UI**: filter by servo IDs and time window, preview results as a table.
+```bash
+pip install yourdfpy trimesh
+```
 
-Default database path: `~/.soarm_telemetry.db`
+#### Homing Wizard
 
-#### EEPROM Diff (Config tab)
+**Automatic mode** — drives each joint in wheel mode, detects stall at both
+limits, records min/max ticks, restores servo mode, moves to midpoint. A
+**Dry-run** checkbox simulates the sweep with FK animation without touching
+hardware.
 
-Compares a previously exported JSON snapshot against the current live register
-state of the servos.
+**Manual mode** — disable torque, move joints by hand, record min/max via
+per-joint buttons, then compute offsets. Both modes share the same
+*Apply* (write EEPROM) and *Save JSON* actions.
 
-1. Export a snapshot with **Read & Export** (or load an existing one).
-2. Click **Compare Snapshot vs Live** — the tool reads the current register
-   state and renders a side-by-side table. Rows where the values differ are
-   highlighted in red.
+#### PID Tuning — Step Response
 
-Useful after a firmware update, hardware swap, or re-homing to confirm that
-the servo configuration is unchanged.
+After writing new P/D/I gains, fire a position step from the **Step Response**
+folder:
 
-#### Trajectory Preview (Recorder tab)
+1. Set **Step target**, speed, acceleration, and duration.
+2. Press **Send Step** — the servo moves and positions are polled at 20 Hz.
+3. The uPlot chart shows **Reference** (red) and **Actual** (blue) traces,
+   updating live and freezing at completion.
+4. Metrics are computed automatically:
 
-After uploading a trajectory CSV, the tab renders an overlaid Plotly
-time-series of all joint positions before any packets are sent. A **Dry-Run
-Preview** button confirms the chart is accurate without touching the servos.
-Duration and frame-count readouts are shown above the chart.
+| Metric | Definition |
+|---|---|
+| Steady-state error | Mean of last 20 % of samples vs target |
+| Overshoot | Peak excursion beyond target (ticks and %) |
+| Peak time | Time to reach the peak |
+| Rise time | 10 % → 90 % of step amplitude |
+| Settling time | Last instant \|pos − target\| > 2 % band |
+
+#### Monitor — Live Charts
+
+Two 20-second rolling uPlot charts (position and speed) are updated at
+100 ms from a shared `deque` buffer in the main display loop. A joint
+telemetry table, health snapshot (temp / current, updated every 5 polls),
+and a full register inspector (`read_servo_diagnostics`) are co-located in
+the same tab.
+
+#### GroupSyncRead Poll Architecture
+
+The background daemon thread issues a single `GroupSyncRead.txRxPacket()`
+per interval to retrieve position + speed for all joints in one bus
+transaction, falling back to per-servo `ReadPosSpeed` on failure. Temperature
+and current are sampled every 5th iteration to reduce bus load.
 
 ---
 

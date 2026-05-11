@@ -3,13 +3,13 @@
 
 Tabs
 ----
-1. Homing Wizard  -- automatic ROM sweep or manual limit recording
-2. Command Panel  -- per-joint position / speed / acc commands + sync packet
-3. Calibration    -- scan, assign IDs, limits, acc / speed / mode / baud
-4. Monitor        -- live uPlot charts, joint table, health, servo inspector
+1. Start Up       -- connect/disconnect, quick torque, scan servos
+2. Homing Wizard  -- automatic ROM sweep or manual limit recording
+3. PID Tuning     -- read/write P/D/I gains + live step-response chart
+4. Command Panel  -- per-joint position / speed / acc commands + sync packet
 5. Recorder       -- record & replay demonstration trajectories
-6. PID Tuning     -- read / write P / D / I gains per servo (EEPROM)
-7. Config         -- export / import register snapshots to JSON
+6. Monitor        -- live uPlot charts, joint table, health, servo inspector
+7. Reconfigure    -- calibration (IDs / limits / mode / baud) + config export/import
 
 Launch
 ------
