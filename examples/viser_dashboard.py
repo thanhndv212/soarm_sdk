@@ -50,17 +50,15 @@ except ImportError:
     _URDF_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
-# Path setup – same guard as homing_calibrate.py / homing_dashboard.py
+# Path setup — allows running without installing the package.
 # ---------------------------------------------------------------------------
 _src_root = Path(__file__).resolve().parents[1] / "src"
 if _src_root.is_dir() and str(_src_root) not in sys.path:
     sys.path.insert(0, str(_src_root))
 
-_examples_dir = Path(__file__).resolve().parent
-if str(_examples_dir) not in sys.path:
-    sys.path.insert(0, str(_examples_dir))
+import importlib as _il  # noqa: E402
 
-from homing_calibrate import (  # noqa: E402
+from soarm_sdk import (  # noqa: E402
     COMM_SUCCESS,
     STS_ACC,
     STS_BAUD_RATE,
@@ -71,21 +69,19 @@ from homing_calibrate import (  # noqa: E402
     STS_MIN_ANGLE_LIMIT_L,
     STS_MODE,
     STS_TORQUE_ENABLE,
+    PortHandler,
     discover_servos,
     get_available_ports,
     parse_range,
     read_servo_diagnostics,
     run_calibration,
+    sts as _Sts,
     write1,
     write2,
 )
-
-import importlib as _il  # noqa: E402
-
-_def = _il.import_module("soarm_sdk.stservo_def")
-from soarm_sdk import PortHandler, sts as _Sts  # noqa: E402
 from soarm_sdk.conversions import ticks_to_radians  # noqa: E402
 
+_def = _il.import_module("soarm_sdk.stservo_def")
 STS_OFS_L: int = _def.STS_OFS_L
 STS_GOAL_POSITION_L: int = _def.STS_GOAL_POSITION_L
 STS_PRESENT_TEMPERATURE: int = _def.STS_PRESENT_TEMPERATURE

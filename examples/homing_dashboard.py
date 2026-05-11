@@ -43,13 +43,15 @@ except ImportError as exc:  # pragma: no cover
     ) from exc
 
 # ---------------------------------------------------------------------------
-# Path setup -- same guard as homing_calibrate.py
+# Path setup — allows running without installing the package.
 # ---------------------------------------------------------------------------
 _src_root = Path(__file__).resolve().parents[1] / "src"
 if _src_root.is_dir() and str(_src_root) not in sys.path:
     sys.path.insert(0, str(_src_root))
 
-from homing_calibrate import (  # noqa: E402
+import importlib as _il  # noqa: E402
+
+from soarm_sdk import (  # noqa: E402
     COMM_SUCCESS,
     STS_ACC,
     STS_BAUD_RATE,
@@ -60,21 +62,19 @@ from homing_calibrate import (  # noqa: E402
     STS_MAX_ANGLE_LIMIT_L,
     STS_MODE,
     STS_TORQUE_ENABLE,
+    GroupSyncRead,
+    PortHandler,
     discover_servos,
     get_available_ports,
     parse_range,
     read_servo_diagnostics,
     run_calibration,
+    sts as _Sts,
     write1,
     write2,
 )
 
-import importlib as _il  # noqa: E402
-
 _def = _il.import_module("soarm_sdk.stservo_def")
-from soarm_sdk import GroupSyncRead, PortHandler, sts as _Sts  # noqa: E402
-
-# Additional register addresses not re-exported by homing_calibrate
 STS_OFS_L: int = _def.STS_OFS_L
 STS_GOAL_POSITION_L: int = _def.STS_GOAL_POSITION_L
 STS_PRESENT_TEMPERATURE: int = _def.STS_PRESENT_TEMPERATURE

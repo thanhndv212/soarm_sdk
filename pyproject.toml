@@ -17,12 +17,6 @@ dependencies = [
     "streamlit>=1.38",
 ]
 
-[project.optional-dependencies]
-viser = [
-    "viser>=1.0.0",
-    "yourdfpy>=0.0.53",
-    "trimesh>=3.21",
-]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
@@ -33,6 +27,13 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 keywords = ["soarm", "feetech", "sts", "scs", "robotics", "manipulator", "sdk"]
+
+[project.optional-dependencies]
+viser = [
+    "viser>=1.0.0",
+    "yourdfpy>=0.0.53",
+    "trimesh>=3.21",
+]
 
 [project.urls]
 Homepage = "https://github.com/thanhndv212/fullstack-manip"
