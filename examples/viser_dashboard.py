@@ -1695,18 +1695,97 @@ def _build_tab_recorder(
 
 # ---------------------------------------------------------------------------
 
+_STEP_POLL_S = 0.05  # 20 Hz position polling during step response
+
+
+def _compute_step_metrics(
+    t: List[float],
+    actual: List[float],
+    start: float,
+    target: float,
+) -> str:
+    """Return a Markdown table of standard step-response metrics."""
+    if len(actual) < 3:
+        return "*Not enough samples for metrics.*"
+
+    arr = np.array(actual, dtype=np.float64)
+    t_arr = np.array(t, dtype=np.float64) - t[0]
+
+    step_size = target - start
+    if abs(step_size) < 1:
+        return "*Step too small for metrics (< 1 tick).*"
+
+    direction = 1.0 if step_size > 0 else -1.0
+
+    # Steady-state: mean of last 20 % of samples
+    ss_n = max(1, len(arr) // 5)
+    ss_val = float(np.mean(arr[-ss_n:]))
+    ss_error = abs(ss_val - target)
+    ss_error_pct = ss_error / abs(step_size) * 100.0
+
+    # Overshoot: peak excursion beyond target in the step direction
+    if direction > 0:
+        peak_val = float(np.max(arr))
+        overshoot_ticks = max(0.0, peak_val - target)
+        peak_idx = int(np.argmax(arr))
+    else:
+        peak_val = float(np.min(arr))
+        overshoot_ticks = max(0.0, target - peak_val)
+        peak_idx = int(np.argmin(arr))
+    overshoot_pct = overshoot_ticks / abs(step_size) * 100.0
+    t_peak = float(t_arr[peak_idx])
+
+    # Rise time: 10 % → 90 % of step amplitude
+    lo = start + 0.10 * step_size
+    hi = start + 0.90 * step_size
+    if direction > 0:
+        idx_lo = np.where(arr >= lo)[0]
+        idx_hi = np.where(arr >= hi)[0]
+    else:
+        idx_lo = np.where(arr <= lo)[0]
+        idx_hi = np.where(arr <= hi)[0]
+    t_rise = (
+        float(t_arr[idx_hi[0]]) - float(t_arr[idx_lo[0]])
+        if len(idx_lo) and len(idx_hi)
+        else float("nan")
+    )
+
+    # Settling time: last time |pos − target| > 2 % of step amplitude
+    band = 0.02 * abs(step_size)
+    outside = np.where(np.abs(arr - target) > band)[0]
+    t_settle = float(t_arr[outside[-1]]) if len(outside) else 0.0
+
+    def _f(v: float, unit: str = "", d: int = 2) -> str:
+        return "—" if np.isnan(v) else f"{v:.{d}f}{unit}"
+
+    rows = [
+        (
+            "Steady-state error",
+            f"{_f(ss_error, ' ticks', 1)} ({_f(ss_error_pct, ' %', 1)})",
+        ),
+        (
+            "Overshoot",
+            f"{_f(overshoot_ticks, ' ticks', 1)} ({_f(overshoot_pct, ' %', 1)})",
+        ),
+        ("Peak time", _f(t_peak, " s")),
+        ("Rise time (10→90 %)", _f(t_rise, " s")),
+        ("Settling time (±2 %)", _f(t_settle, " s")),
+        ("Samples collected", str(len(arr))),
+    ]
+    lines = ["| Metric | Value |", "|--------|-------|"] + [
+        f"| {lbl} | {val} |" for lbl, val in rows
+    ]
+    return "\n".join(lines)
+
 
 def _build_tab_pid(
     server: viser.ViserServer,
     device_h: "viser.GuiTextHandle",
     baud_h: "viser.GuiNumberHandle",
 ) -> None:
-    """PID gain tuning for STS3215 servos.
+    """PID gain tuning for STS3215 servos with live step-response chart."""
+    import viser.uplot as _uplot
 
-    Gains are stored in EEPROM (addresses 21–23). Writing requires an
-    EEPROM unlock (STS_LOCK=0) and a subsequent lock (STS_LOCK=1).
-    Values are 8-bit unsigned integers (0–254).
-    """
     server.gui.add_markdown("## PID Gain Tuning")
     server.gui.add_markdown(
         "Read and write the **P / D / I** coefficients stored in EEPROM.  \n"
@@ -1739,6 +1818,57 @@ def _build_tab_pid(
     write_pid_btn = server.gui.add_button("Write Gains to EEPROM", color="red")
     pid_log_md = server.gui.add_markdown("*Select a servo and press Read.*")
 
+    # ── Step Response ──────────────────────────────────────────────────────────────
+    with server.gui.add_folder("Step Response"):
+        server.gui.add_markdown(
+            "Command a position step and record the 20 Hz response.  \n"
+            "Set the target within the servo’s homed range."
+        )
+        step_target_h = server.gui.add_slider(
+            "Step target (ticks)", min=0, max=4095, step=1, initial_value=2048
+        )
+        step_speed_h = server.gui.add_number(
+            "Speed (ticks/s)", initial_value=500, min=50, max=4000, step=50
+        )
+        step_acc_h = server.gui.add_number(
+            "Acceleration", initial_value=50, min=0, max=254, step=1
+        )
+        step_dur_h = server.gui.add_number(
+            "Duration (s)", initial_value=3.0, min=0.5, max=10.0, step=0.5
+        )
+        step_btn = server.gui.add_button("Send Step", color="green")
+        step_stop_btn = server.gui.add_button(
+            "Stop", color="red", disabled=True
+        )
+        step_status_md = server.gui.add_markdown(
+            "*Configure above and press Send Step.*"
+        )
+
+        # Flat placeholder so the chart renders before the first step
+        _init_t = np.linspace(0.0, 3.0, 60, dtype=np.float64)
+        _init_z = np.zeros(60, dtype=np.float64)
+        step_chart = server.gui.add_uplot(
+            data=(_init_t, _init_z.copy(), _init_z.copy()),
+            series=(
+                _uplot.Series(label="time"),
+                _uplot.Series(label="Reference", stroke="#e74c3c", width=2),
+                _uplot.Series(label="Actual", stroke="#3498db", width=2),
+            ),
+            title="Step Response",
+            axes=(
+                _uplot.Axis(label="time (s)"),
+                _uplot.Axis(label="position (ticks)", side=3),
+            ),
+            legend=_uplot.Legend(show=True),
+            aspect=3.0,
+        )
+        metrics_md = server.gui.add_markdown("")
+
+    # Shared stop-event slot; replaced on each new step run
+    _step_stop: Dict[str, Any] = {"event": threading.Event()}
+
+    # ── Callbacks ───────────────────────────────────────────────────────────────
+
     @read_btn.on_click
     def _do_read(_: viser.GuiEvent) -> None:
         device = device_h.value
@@ -1747,7 +1877,7 @@ def _build_tab_pid(
         try:
             with _bus(device, baud) as srv:
 
-                def _read1(addr: int, label: str) -> Optional[int]:
+                def _read1(addr: int, label: str) -> int:
                     val, result, _ = srv.read1ByteTxRx(sid, addr)
                     if result != COMM_SUCCESS:
                         raise IOError(f"Read {label} failed (result={result})")
@@ -1760,7 +1890,6 @@ def _build_tab_pid(
             read_p_md.content = f"**P:** {p_val}"
             read_d_md.content = f"**D:** {d_val}"
             read_i_md.content = f"**I:** {i_val}"
-            # Pre-fill write fields for convenience
             new_p_h.value = float(p_val)  # type: ignore[assignment]
             new_d_h.value = float(d_val)  # type: ignore[assignment]
             new_i_h.value = float(i_val)  # type: ignore[assignment]
@@ -1785,7 +1914,6 @@ def _build_tab_pid(
                 write1(srv, sid, STS_D_COEF, d, "D gain")
                 write1(srv, sid, STS_I_COEF, i, "I gain")
                 write1(srv, sid, STS_LOCK, 1, "lock EEPROM")
-            # Refresh displayed values
             read_p_md.content = f"**P:** {p}"
             read_d_md.content = f"**D:** {d}"
             read_i_md.content = f"**I:** {i}"
@@ -1794,6 +1922,103 @@ def _build_tab_pid(
             )
         except Exception as exc:
             pid_log_md.content = f"**Write error (J{sid}):** {exc}"
+
+    @step_btn.on_click
+    def _do_step(_: viser.GuiEvent) -> None:
+        device = device_h.value
+        baud = int(baud_h.value)
+        sid = int(servo_id_h.value)
+        target = int(step_target_h.value)
+        speed = int(step_speed_h.value)
+        acc = int(step_acc_h.value)
+        duration = float(step_dur_h.value)
+
+        stop_ev = threading.Event()
+        _step_stop["event"] = stop_ev
+        step_btn.disabled = True
+        step_stop_btn.disabled = False
+        step_status_md.content = (
+            f"*Running step → J{sid} target={target} ticks…*"
+        )
+        metrics_md.content = ""
+
+        def _run() -> None:
+            t_samples: List[float] = []
+            actual_samples: List[float] = []
+            start_pos: Optional[float] = None
+            try:
+                with _bus(device, baud) as srv:
+                    # Snapshot current position before the step
+                    p0, r0, _ = srv.ReadPos(sid)
+                    start_pos = float(p0) if r0 == COMM_SUCCESS else None
+
+                    # Ensure torque on, send step command
+                    write1(srv, sid, STS_TORQUE_ENABLE, 1, "torque on")
+                    srv.WritePosEx(sid, target, speed, acc)
+                    t0 = time.monotonic()
+
+                    while not stop_ev.is_set():
+                        t_loop = time.monotonic()
+                        now = t_loop - t0
+
+                        p, r, _ = srv.ReadPos(sid)
+                        if r == COMM_SUCCESS:
+                            t_samples.append(now)
+                            actual_samples.append(float(p))
+
+                        # Push live chart update every sample
+                        if len(t_samples) >= 2:
+                            t_np = np.array(t_samples, dtype=np.float64)
+                            a_np = np.array(actual_samples, dtype=np.float64)
+                            r_np = np.full_like(t_np, float(target))
+                            step_chart.data = (t_np, r_np, a_np)
+
+                        if now >= duration:
+                            break
+
+                        # Pace to _STEP_POLL_S; wait() also serves as abort check
+                        sleep_s = _STEP_POLL_S - (time.monotonic() - t_loop)
+                        if sleep_s > 0:
+                            stop_ev.wait(timeout=sleep_s)
+
+            except Exception as exc:
+                step_status_md.content = f"**Step error**: {exc}"
+                step_btn.disabled = False
+                step_stop_btn.disabled = True
+                return
+
+            # Final chart push (in case last sample wasn't pushed)
+            n = len(t_samples)
+            if n >= 2:
+                t_np = np.array(t_samples, dtype=np.float64)
+                a_np = np.array(actual_samples, dtype=np.float64)
+                r_np = np.full_like(t_np, float(target))
+                step_chart.data = (t_np, r_np, a_np)
+
+            # Compute and display metrics
+            if start_pos is not None and n >= 3:
+                metrics_md.content = _compute_step_metrics(
+                    t_samples, actual_samples, start_pos, float(target)
+                )
+                actual_hz = n / max(t_samples[-1], 1e-3)
+                step_status_md.content = (
+                    f"**Done** — J{sid}: {int(start_pos)}→{target} ticks, "
+                    f"{n} samples @ ~{actual_hz:.0f} Hz"
+                )
+            else:
+                step_status_md.content = (
+                    "*Step complete — insufficient samples for metrics.*"
+                )
+
+            step_btn.disabled = False
+            step_stop_btn.disabled = True
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    @step_stop_btn.on_click
+    def _do_stop(_: viser.GuiEvent) -> None:
+        _step_stop["event"].set()
+        step_stop_btn.disabled = True
 
 
 # ---------------------------------------------------------------------------
