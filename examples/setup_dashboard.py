@@ -1,23 +1,15 @@
 #!/usr/bin/env python
-"""Viser dashboard for soarm_sdk: robot control + real-time 3-D visualisation.
+"""GUI for setting up a fresh SO-ARM100: discover its port, home it, configure it.
 
-Tabs
-----
-1. Start Up       -- connect/disconnect, quick torque, scan servos
-2. Homing Wizard  -- automatic ROM sweep or manual limit recording
-3. Reconfigure    -- calibration (IDs / limits / mode / baud) + config export/import
-4. Command Panel  -- per-joint position / speed / acc commands + sync packet
-5. PID Tuning     -- read/write P/D/I gains + live step-response chart
-6. Monitor        -- live uPlot charts, joint table, health, servo inspector
-7. Recorder       -- record & replay demonstration trajectories
-
-Built entirely on ``soarm_sdk.dashboard`` — this script just registers the
-built-in panels; see that package if you want to add your own tab instead
-of forking this file.
+Just the three "bring a fresh arm online" panels (Start Up, Homing Wizard,
+Reconfigure), built on ``soarm_sdk.dashboard`` so new applications can be
+registered the same way instead of forking this script — see
+``viser_dashboard.py`` for the larger day-to-day operation dashboard
+(monitoring, manual commands, PID tuning, recording).
 
 Launch
 ------
-    python examples/viser_dashboard.py \\
+    python examples/setup_dashboard.py \\
         [--device /dev/ttyXXX] [--baud 1000000] \\
         [--port 8080] [--urdf PATH] [--interval-ms 200]
 """
@@ -37,7 +29,7 @@ if _src_root.is_dir() and str(_src_root) not in sys.path:
 
 from soarm_sdk import get_available_ports  # noqa: E402
 from soarm_sdk.dashboard import DashboardApp  # noqa: E402
-from soarm_sdk.dashboard.panels import command, monitor, pid, recorder, setup  # noqa: E402
+from soarm_sdk.dashboard.panels import setup  # noqa: E402
 
 _DEFAULT_URDF = (
     Path(__file__).resolve().parents[2] / "SO-ARM100" / "Simulation" / "SO100" / "so100.urdf"
@@ -45,9 +37,7 @@ _DEFAULT_URDF = (
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Viser dashboard for soarm_sdk"
-    )
+    parser = argparse.ArgumentParser(description="soarm_sdk hardware setup dashboard")
     parser.add_argument("--device", default="", help="Serial device path")
     parser.add_argument("--baud", type=int, default=1_000_000)
     parser.add_argument("--port", type=int, default=8080, help="Viser HTTP port")
@@ -62,24 +52,18 @@ def main() -> None:
         ports = get_available_ports()
         if ports:
             device = ports[0][0]
-            print(f"[viser_dashboard] Auto-selected device: {device}")
+            print(f"[setup_dashboard] Auto-selected device: {device}")
 
     app = DashboardApp(
-        title="soarm_sdk Dashboard",
+        title="soarm_sdk — Hardware Setup",
         port=args.port,
         device=device,
         baud=args.baud,
         interval_ms=args.interval_ms,
         urdf_path=args.urdf,
     )
-
     for panel in setup.build_all(fk_update_fn=app.fk_update):
         app.register(panel)
-    app.register(command.build_command_panel())
-    app.register(pid.build_pid_panel())
-    app.register(monitor.build_monitor_panel())
-    app.register(recorder.build_recorder_panel())
-
     app.run()
 
 
