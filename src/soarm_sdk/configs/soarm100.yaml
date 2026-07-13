@@ -1,0 +1,39 @@
+# SO-ARM100 robot configuration — consumed by soarm_sdk.robot.load_robot_config()
+# and soarm_sdk.servo_robot.ServoRobot.
+#
+# Trimmed to the fields this package's Robot/ServoRobot classes actually
+# read. The upstream fullstack-manip version of this file also carries
+# MuJoCo simulation and gripper-semantics blocks for its own MuJoCoRobot —
+# not applicable here, so left out rather than shipped as unused/misleading
+# config.
+
+name: soarm100
+description: "6-DOF Feetech STS3215 servo arm with 1-DOF jaw gripper"
+
+# Order matches servo IDs 1-6.
+n_dof: 6
+
+joint_names:
+  - Rotation
+  - Pitch
+  - Elbow
+  - Wrist_Pitch
+  - Wrist_Roll
+  - Jaw
+
+# Joint limits in radians.
+joint_limits_lower: [-1.92, -3.32, -0.174, -1.66, -2.79, -0.174]
+joint_limits_upper: [ 1.92,  0.174,  3.14,   1.66,  2.79,  1.75]
+
+# Home position (radians).
+home_position: [0.0, -1.57, 1.57, 1.57, -1.57, 0.0]
+
+# ── Hardware (STS3215 servos) ─────────────────────────────────────────────
+hardware:
+  servo_ids: [1, 2, 3, 4, 5, 6]
+  zero_offsets: [2048, 2048, 2048, 2048, 2048, 2048]
+  direction_signs: [1, 1, 1, 1, 1, 1]
+  default_speed: 300   # ticks/s
+  default_acc: 50      # acceleration units
+  state_freq: 100      # Hz — bus read loop
+  baud: 1000000

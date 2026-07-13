@@ -64,6 +64,14 @@ from .stservo_def import (
     STS_TORQUE_ENABLE,
 )
 
+# -- Robot interface layer: types, Protocol, real-hardware implementation ---
+from .types import Pose, JointState
+from .interfaces import RobotInterface
+from .robot import Robot, load_robot_config
+from .servo_robot import ServoRobot
+from .hardware_interface import ServoHardwareInterface
+from .rate_limiter import RateLimiter
+
 __all__ = [
     # Core protocol
     "PortHandler",
@@ -117,4 +125,13 @@ __all__ = [
     "STS_MAX_ANGLE_LIMIT_L",
     "STS_MODE",
     "STS_TORQUE_ENABLE",
+    # Robot interface layer
+    "Pose",
+    "JointState",
+    "RobotInterface",
+    "Robot",
+    "load_robot_config",
+    "ServoRobot",
+    "ServoHardwareInterface",
+    "RateLimiter",
 ]
