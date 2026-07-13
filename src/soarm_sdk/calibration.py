@@ -26,13 +26,12 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from .bus import discover_servos, scan_servos, write1, write2
+from .bus import scan_servos, write1, write2
 from .port_handler import PortHandler
 from .sts import sts
 from .stservo_def import (
-    COMM_SUCCESS,
     STS_ACC,
     STS_BAUD_RATE,
     STS_GOAL_SPEED_L,

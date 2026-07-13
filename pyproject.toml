@@ -36,9 +36,10 @@ viser = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/thanhndv212/fullstack-manip"
-Documentation = "https://github.com/thanhndv212/fullstack-manip/tree/main/soarm-sdk/docs"
-Source = "https://github.com/thanhndv212/fullstack-manip"
+Homepage = "https://github.com/thanhndv212/soarm_sdk"
+Documentation = "https://github.com/thanhndv212/soarm_sdk/tree/main/docs"
+Source = "https://github.com/thanhndv212/soarm_sdk"
+Changelog = "https://github.com/thanhndv212/soarm_sdk/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/soarm_sdk"]
@@ -47,10 +48,15 @@ packages = ["src/soarm_sdk"]
 dependencies = [
     "pytest>=8.2",
 ]
+[tool.hatch.envs.default.scripts]
+test = "pytest {args:tests}"
 
 [tool.hatch.envs.lint]
 dependencies = [
     "ruff>=0.6",
 ]
 [tool.hatch.envs.lint.scripts]
-check = "ruff check src"
+check = "ruff check src tests"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
