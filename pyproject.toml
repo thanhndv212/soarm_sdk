@@ -35,6 +35,12 @@ viser = [
     "yourdfpy>=0.0.53",
     "trimesh>=3.21",
 ]
+# LeRobotRobot drives the same servo bus through lerobot's SOFollower
+# instead of this SDK's own protocol stack. Optional: nothing else in the
+# package imports lerobot, and the import is deferred to connect().
+lerobot = [
+    "lerobot>=0.1.0",
+]
 
 [project.scripts]
 soarm-calibrate = "soarm_sdk.cli.calibrate:main"

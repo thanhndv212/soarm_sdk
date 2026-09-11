@@ -7,6 +7,8 @@ RL policies) and *hardware code*. Everything above this layer should speak
 Backends
 --------
 - :class:`ServoRobot` — real STS3215 hardware over RS-485.
+- :class:`LeRobotRobot` — the same bus via lerobot's ``SOFollower``
+  (optional dependency: ``pip install soarm-sdk[lerobot]``).
 - :class:`NullRobot` — no hardware; tracks commanded state in memory.
 
 A simulation backend elsewhere in the workspace (mjlab, a MuJoCo wrapper,
@@ -23,6 +25,7 @@ from .base import Robot, load_robot_config
 from .hardware import ServoHardwareInterface
 from .servo import ServoRobot
 from .null import NullRobot
+from .lerobot import LeRobotRobot
 
 __all__ = [
     "Pose",
@@ -35,4 +38,5 @@ __all__ = [
     "ServoHardwareInterface",
     "ServoRobot",
     "NullRobot",
+    "LeRobotRobot",
 ]

@@ -64,6 +64,22 @@ using them needs to change, but new code should prefer the paths under
   runnable inside the HPP planning container, where the SDK isn't
   installed at all — using `NullRobot` there would reintroduce the
   import it is avoiding.
+- `soarm_sdk.robot.LeRobotRobot` — the same servo bus driven through
+  lerobot's `SOFollower` instead of this SDK's protocol stack, behind the
+  same `RobotInterface`. m5teleop had a hand-rolled wrapper (`ArmInterface`)
+  that did not implement the interface, so teleop code could not be pointed
+  at a planner's robot, a simulation, or `NullRobot` without a rewrite.
+  lerobot stays an optional dependency (`pip install soarm-sdk[lerobot]`),
+  imported lazily in `connect()`; a `follower_factory` hook makes the
+  backend testable without it. Note it converts lerobot's *normalized*
+  degrees to radians and nothing more — that is not the URDF frame a
+  planner speaks; see `calibration/frame.py`.
+- **Config-driven gripper API** on the `Robot` base class — `set_gripper()`,
+  `toggle_gripper()`, `gripper_is_open`, `gripper_index`, driven by an
+  optional `gripper:` block (`joint_index`, `open_rad`, `closed_rad`) now
+  present in `configs/soarm100.yaml`. m5teleop and soarm_tamp each carried
+  their own `GRIPPER_OPEN_DEG`/`CLOSED_DEG` constants and their own "which
+  joint is the jaw" assumption; this makes it a property of the robot.
 - `soarm_sdk.trajectory.resample()` — linear waypoint interpolation
   bounding the per-joint step between consecutive commands. Generalizes a
   pattern reimplemented per-caller around planned/recorded paths (e.g.

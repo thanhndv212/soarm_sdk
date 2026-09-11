@@ -146,57 +146,62 @@ tick = radians_to_ticks(1.57)         # → 3073
 
 ---
 
-### Real-Hardware Robot Interface — `ServoHardwareInterface`
+### Robot Interface — `soarm_sdk.robot`
 
-Drop-in replacement for the MuJoCo-backed robot in `fullstack_manip`. Implements
-`RobotInterface` so it can be passed directly to `MotionExecutor` without any
-changes to controllers or planners.
+The abstraction boundary between algorithm code and hardware. Application code
+(planners, teleop, RL policies) should speak `RobotInterface` — a structural
+`typing.Protocol`, so a simulation backend elsewhere can satisfy it without
+depending on this package at all — and never a specific backend.
 
-**Implementation:** `fullstack_manip/core/hardware_interface.py`
-
-**Architecture:**
-- A background daemon thread runs at `state_freq` Hz (default 100 Hz) and
-  keeps a cached joint state updated via one `GroupSyncRead.txRxPacket()` call
-  per iteration.
-- Write calls convert radians → ticks and broadcast a single `GroupSyncWrite`
-  packet to all joints atomically.
+| Backend | What it drives |
+|---|---|
+| `ServoRobot` | Real STS3215 hardware over RS-485 |
+| `NullRobot` | Nothing — tracks commanded state in memory (tests, CI, offline runs) |
 
 ```python
-from fullstack_manip.core.hardware_interface import ServoHardwareInterface
+from soarm_sdk import ServoRobot
 
-hw = ServoHardwareInterface(
-    port="/dev/tty.usbserial-XXXX",  # macOS; Linux: /dev/ttyUSB0
-    baud=1_000_000,
-    joint_ids=[1, 2, 3, 4, 5, 6],   # default soarm100 IDs
-    torque_on_start=True,
+robot = ServoRobot(
+    port="/dev/tty.usbserial-XXXX",   # macOS; Linux: /dev/ttyUSB0
+    max_step_rad=0.05,                # per-command bound, on top of joint limits
 )
 
-with hw:  # opens port, starts background reader, enables torque
-    q = hw.get_robot_joint_positions()          # → np.ndarray (radians)
-    state = hw.get_robot_joint_state()          # → RobotState (pos, vel, effort)
-    hw.set_robot_joint_positions(target_q)      # broadcast sync packet
+with robot:                            # opens port, starts background reader
+    q = robot.get_joint_positions()    # -> np.ndarray (radians)
+    state = robot.get_joint_state()    # -> JointState (pos, vel, effort, timestamp)
+    robot.set_joint_positions(target_q)
 ```
 
-Swap into an existing `MotionExecutor`:
+Swapping in the no-hardware backend changes nothing else at the call site:
 
 ```python
-# Before (simulation):
-# executor = MotionExecutor(robot=mujoco_robot, ...)
-
-# After (real hardware):
-executor = MotionExecutor(robot=hw, ...)
+from soarm_sdk import NullRobot
+robot = NullRobot()                    # same interface, no serial port
 ```
+
+**Under the hood** (`robot/hardware.py`, `ServoHardwareInterface` — reach for it
+directly only if you need register-level control):
+
+- A background daemon thread runs at `state_freq` Hz (default 100 Hz) and keeps
+  a cached joint state updated via one `GroupSyncRead.txRxPacket()` per
+  iteration.
+- Write calls convert radians -> ticks and broadcast a single `GroupSyncWrite`
+  packet to all joints atomically.
+- Declared joint limits and the per-step bound are enforced on every write, and
+  clamps are counted (`limit_clamps`, `step_clamps`) rather than failing
+  silently.
 
 ---
 
-### Dashboard — `examples/viser_dashboard.py`
+### Dashboard — `soarm-dashboard`
 
 A browser-based control panel built on [Viser](https://viser.studio) with
 real-time 3-D forward-kinematics visualisation. The server starts on
 `http://localhost:8080` by default.
 
 ```bash
-python examples/viser_dashboard.py --device /dev/ttyUSB0
+soarm-dashboard --device /dev/ttyUSB0
+# from a checkout without installing: python examples/viser_dashboard.py ...
 ```
 
 The dashboard has 7 tabs:

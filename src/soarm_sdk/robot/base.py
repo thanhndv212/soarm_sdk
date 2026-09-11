@@ -19,7 +19,7 @@ from typing import Any, Dict, Optional, Union
 
 import numpy as np
 
-from .config import validate_robot_config
+from .config import ConfigError, validate_robot_config
 from .types import JointState, Pose
 
 try:
@@ -149,6 +149,59 @@ class Robot(ABC):
     @abstractmethod
     def get_joint_state(self) -> JointState:
         """Full joint state snapshot (positions + optional vel/effort)."""
+
+    # -- gripper -------------------------------------------------------------
+    #
+    # Opening and closing the jaw is a robot capability, not an application's
+    # business: m5teleop and soarm_tamp each carried their own
+    # GRIPPER_OPEN/CLOSED constants and their own "which joint is the jaw"
+    # assumption. Driven here by an optional ``gripper`` block in the config:
+    #
+    #   gripper:
+    #     joint_index: 5      # defaults to the last joint
+    #     open_rad: 1.4
+    #     closed_rad: 0.0
+
+    @property
+    def has_gripper(self) -> bool:
+        """Whether this robot's config declares a gripper."""
+        return "gripper" in self._config
+
+    @property
+    def gripper_index(self) -> int:
+        """Index of the jaw joint in the joint vector."""
+        self._assert_gripper()
+        return int(self._config["gripper"].get("joint_index", self._n_dof - 1))
+
+    def set_gripper(self, open: bool) -> None:
+        """Open or close the jaw, leaving every other joint where it is."""
+        self._assert_gripper()
+        g = self._config["gripper"]
+        positions = self.get_joint_positions()
+        positions[self.gripper_index] = float(
+            g["open_rad"] if open else g["closed_rad"]
+        )
+        self.set_joint_positions(positions)
+
+    @property
+    def gripper_is_open(self) -> bool:
+        """Whether the jaw is nearer its open pose than its closed one."""
+        self._assert_gripper()
+        g = self._config["gripper"]
+        pos = float(self.get_joint_positions()[self.gripper_index])
+        return abs(pos - float(g["open_rad"])) < abs(pos - float(g["closed_rad"]))
+
+    def toggle_gripper(self) -> None:
+        """Close the jaw if it is open, open it if it is closed."""
+        self.set_gripper(not self.gripper_is_open)
+
+    def _assert_gripper(self) -> None:
+        if "gripper" not in self._config:
+            raise ConfigError(
+                f"{type(self).__name__}'s config declares no 'gripper' block; "
+                "add gripper.open_rad/closed_rad (and optionally joint_index) "
+                "to use the gripper API"
+            )
 
     # -- optional overrides --------------------------------------------------
 

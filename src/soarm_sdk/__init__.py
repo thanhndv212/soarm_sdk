@@ -84,6 +84,7 @@ from .robot import (
     ServoRobot,
     ServoHardwareInterface,
     NullRobot,
+    LeRobotRobot,
 )
 from .rate_limiter import RateLimiter
 
@@ -153,6 +154,7 @@ __all__ = [
     "ServoRobot",
     "ServoHardwareInterface",
     "NullRobot",
+    "LeRobotRobot",
     "RateLimiter",
     # Calibration
     "JointCalibration",
