@@ -42,9 +42,8 @@ from .types import JointState, Pose
 __all__ = ["LeRobotRobot", "DEFAULT_MOTOR_NAMES"]
 
 #: lerobot's motor names for the SO-100/SO-101 follower, in servo-ID order.
-#: These are lerobot's names, deliberately distinct from this SDK's own
-#: ``joint_names`` in ``configs/soarm100.yaml`` (Rotation, Pitch, ...) —
-#: the two name the same six joints in the same order.
+#: Identical to this SDK's own ``joint_names`` and to the URDF's — they all
+#: name the same six joints in the same order.
 DEFAULT_MOTOR_NAMES: List[str] = [
     "shoulder_pan",
     "shoulder_lift",

@@ -94,6 +94,20 @@ class JointCalibration:
         """True when the span ratio says the two sources disagree materially."""
         return abs(self.span_ratio - 1.0) > SPAN_RATIO_TOLERANCE
 
+    @property
+    def reachable_rad(self) -> Tuple[float, float]:
+        """``(lo, hi)`` in URDF radians that this joint can physically reach.
+
+        The measured tick travel — the mechanical hard stops — expressed in
+        the URDF's frame. Ordered, because a negative ``direction_sign``
+        swaps which tick endpoint is the larger angle.
+
+        This is the *hardware* bound. It is not a model's opinion about the
+        joint: whatever a URDF or a config says, the servo stops here.
+        """
+        a, b = self.to_rad(self.tick_min), self.to_rad(self.tick_max)
+        return (a, b) if a <= b else (b, a)
+
 
 @dataclass
 class RobotCalibration:
@@ -132,6 +146,17 @@ class RobotCalibration:
         if len(rad) != len(self.joints):
             raise ValueError(f"expected {len(self.joints)} values, got {len(rad)}")
         return [j.to_ticks(r) for j, r in zip(self.joints, rad)]
+
+    def reachable_limits(self) -> Tuple[List[float], List[float]]:
+        """``(lower, upper)`` per joint, in URDF radians, from measured travel.
+
+        The arm's real hard stops. Intersect a model's declared limits with
+        this before enforcing them, so a command can never be driven past
+        what the mechanism actually allows — see
+        :meth:`~soarm_sdk.robot.servo.ServoRobot.connect`.
+        """
+        pairs = [j.reachable_rad for j in self.joints]
+        return [lo for lo, _ in pairs], [hi for _, hi in pairs]
 
     @property
     def suspect_joints(self) -> List[str]:
