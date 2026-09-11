@@ -19,9 +19,9 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from serial.tools import list_ports as _list_ports_mod
 
-from .port_handler import PortHandler
-from .sts import sts
-from .stservo_def import COMM_SUCCESS, COMM_RX_FAIL
+from ..protocol.port_handler import PortHandler
+from ..protocol.sts import sts
+from ..protocol.registers import COMM_SUCCESS, COMM_RX_FAIL
 
 
 # ---------------------------------------------------------------------------

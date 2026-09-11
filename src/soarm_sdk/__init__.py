@@ -1,20 +1,39 @@
-"""Public exports for the soarm-sdk package."""
+"""Public exports for the soarm-sdk package.
 
-from .port_handler import PortHandler
-from .protocol_packet_handler import (
+Layout
+------
+- :mod:`soarm_sdk.protocol`    -- Feetech wire protocol (ports, packets, sync r/w)
+- :mod:`soarm_sdk.bus`         -- port discovery, diagnostics, servo EEPROM config
+- :mod:`soarm_sdk.robot`       -- the ``RobotInterface``/``Robot`` abstraction + backends
+- :mod:`soarm_sdk.calibration` -- tick <-> URDF-frame mapping (measurement, seeding, storage)
+- :mod:`soarm_sdk.kinematics`  -- URDF loading + forward kinematics (no viewer dependency)
+- :mod:`soarm_sdk.trajectory`  -- waypoint resampling for streaming to a robot
+- :mod:`soarm_sdk.dashboard`   -- the Viser-based operator dashboard
+- :mod:`soarm_sdk.cli`         -- console-script entry points (``soarm-calibrate``, ...)
+
+This top-level module re-exports the names most applications need.
+Everything else is still reachable through its owning submodule.
+"""
+
+from __future__ import annotations
+
+# -- Protocol layer (Feetech wire protocol) ----------------------------------
+from .protocol import (
+    PortHandler,
     ProtocolPacketHandler,
     protocol_packet_handler,
+    GroupSyncRead,
+    GroupSyncWrite,
+    sts,
+    scscl,
 )
-from .group_sync_read import GroupSyncRead
-from .group_sync_write import GroupSyncWrite
-from .sts import sts
-from .scscl import scscl
+
+# -- Conversions --------------------------------------------------------------
 from .conversions import (
     TICKS_PER_REV,
     TICK_ZERO,
     TICKS_PER_RAD,
     RADS_PER_TICK,
-    SOARM100_DIRECTION_SIGNS,
     ticks_to_radians,
     radians_to_ticks,
     speed_ticks_to_rad_s,
@@ -23,7 +42,7 @@ from .conversions import (
     joint_radians_to_ticks,
 )
 
-# -- Bus access (port discovery, scanning, diagnostics, register writes) ----
+# -- Bus access (port discovery, scanning, diagnostics, servo EEPROM config) --
 from .bus import (
     list_ports,
     get_available_ports,
@@ -34,23 +53,13 @@ from .bus import (
     read_servo_diagnostics,
     write1,
     write2,
-)
-
-# -- Calibration (operation planning and execution) -------------------------
-from .calibration import (
     OperationPlan,
-    parse_range,
-    parse_mapping,
-    parse_bool_mapping,
-    build_operation_plan,
-    resolve_id,
-    collect_final_ids,
     apply_plan,
     run_calibration,
 )
 
 # -- Frequently-used register constants re-exported for convenience ---------
-from .stservo_def import (
+from .protocol.registers import (
     COMM_SUCCESS,
     COMM_RX_FAIL,
     STS_ACC,
@@ -64,16 +73,33 @@ from .stservo_def import (
     STS_TORQUE_ENABLE,
 )
 
-# -- Robot interface layer: types, Protocol, real-hardware implementation ---
-from .types import Pose, JointState
-from .interfaces import RobotInterface
-from .robot import Robot, load_robot_config
-from .servo_robot import ServoRobot
-from .hardware_interface import ServoHardwareInterface
+# -- Robot interface layer: types, Protocol, backends ------------------------
+from .robot import (
+    Pose,
+    JointState,
+    RobotInterface,
+    ConfigError,
+    Robot,
+    load_robot_config,
+    ServoRobot,
+    ServoHardwareInterface,
+    NullRobot,
+)
 from .rate_limiter import RateLimiter
 
+# -- Calibration: tick <-> URDF-frame mapping --------------------------------
+from .calibration import (
+    JointCalibration,
+    RobotCalibration,
+    seed_from_travel,
+    seed_from_lerobot,
+)
+
+# -- Trajectory: resampling for streaming to a robot -------------------------
+from .trajectory import resample
+
 __all__ = [
-    # Core protocol
+    # Protocol
     "PortHandler",
     "ProtocolPacketHandler",
     "protocol_packet_handler",
@@ -86,7 +112,6 @@ __all__ = [
     "TICK_ZERO",
     "TICKS_PER_RAD",
     "RADS_PER_TICK",
-    "SOARM100_DIRECTION_SIGNS",
     "ticks_to_radians",
     "radians_to_ticks",
     "speed_ticks_to_rad_s",
@@ -103,14 +128,7 @@ __all__ = [
     "read_servo_diagnostics",
     "write1",
     "write2",
-    # Calibration
     "OperationPlan",
-    "parse_range",
-    "parse_mapping",
-    "parse_bool_mapping",
-    "build_operation_plan",
-    "resolve_id",
-    "collect_final_ids",
     "apply_plan",
     "run_calibration",
     # Register constants
@@ -129,9 +147,18 @@ __all__ = [
     "Pose",
     "JointState",
     "RobotInterface",
+    "ConfigError",
     "Robot",
     "load_robot_config",
     "ServoRobot",
     "ServoHardwareInterface",
+    "NullRobot",
     "RateLimiter",
+    # Calibration
+    "JointCalibration",
+    "RobotCalibration",
+    "seed_from_travel",
+    "seed_from_lerobot",
+    # Trajectory
+    "resample",
 ]

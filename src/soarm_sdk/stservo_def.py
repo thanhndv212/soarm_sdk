@@ -1,109 +1,11 @@
-"""Core protocol constants for STServo actuators."""
+"""Deprecated import path — use :mod:`soarm_sdk.protocol.registers`.
 
-BROADCAST_ID = 0xFE  # 254
-MAX_ID = 0xFC  # 252
-STS_END = 0
+``stservo_def`` was the STS/SCS register-map module's original name; it
+moved to ``protocol/registers.py`` when the wire-protocol layer was split
+out of the flat top-level namespace. This shim keeps every register
+constant (``STS_*``, ``COMM_*``, ...) importable from its old path.
+"""
 
-# Instruction for STServo protocol
-INST_PING = 1
-INST_READ = 2
-INST_WRITE = 3
-INST_REG_WRITE = 4
-INST_ACTION = 5
-INST_SYNC_WRITE = 0x83
-INST_SYNC_READ = 0x82
+from __future__ import annotations
 
-# Communication result codes
-COMM_SUCCESS = 0
-COMM_PORT_BUSY = -1
-COMM_TX_FAIL = -2
-COMM_RX_FAIL = -3
-COMM_TX_ERROR = -4
-COMM_RX_WAITING = -5
-COMM_RX_TIMEOUT = -6
-COMM_RX_CORRUPT = -7
-COMM_NOT_AVAILABLE = -9
-
-# SCSCL control table addresses
-SCSCL_GOAL_POSITION_L = 42
-SCSCL_GOAL_TIME_L = 44
-SCSCL_GOAL_SPEED_L = 46
-SCSCL_LOCK = 48
-SCSCL_MIN_ANGLE_LIMIT_L = 9
-SCSCL_PRESENT_POSITION_L = 56
-SCSCL_PRESENT_SPEED_L = 58
-SCSCL_MOVING = 66
-
-# STS control table addresses
-STS_ID = 5
-STS_BAUD_RATE = 6
-STS_MIN_ANGLE_LIMIT_L = 9
-STS_MIN_ANGLE_LIMIT_H = 10
-STS_MAX_ANGLE_LIMIT_L = 11
-STS_MAX_ANGLE_LIMIT_H = 12
-STS_TORQUE_ENABLE = 40
-STS_ACC = 41
-STS_GOAL_POSITION_L = 42
-STS_GOAL_TIME_L = 44
-STS_GOAL_SPEED_L = 46
-STS_MODE = 33
-STS_MOVING = 66
-STS_PRESENT_POSITION_L = 56
-STS_PRESENT_SPEED_L = 58
-STS_LOCK = 55
-
-# 波特率定义
-STS_1M = 0
-STS_0_5M = 1
-STS_250K = 2
-STS_128K = 3
-STS_115200 = 4
-STS_76800 = 5
-STS_57600 = 6
-STS_38400 = 7
-
-# 内存表定义
-# -------EPROM(只读)--------
-STS_MODEL_L = 3
-STS_MODEL_H = 4
-
-# -------EPROM(读写)--------
-STS_ID = 5
-STS_BAUD_RATE = 6
-STS_MIN_ANGLE_LIMIT_L = 9
-STS_MIN_ANGLE_LIMIT_H = 10
-STS_MAX_ANGLE_LIMIT_L = 11
-STS_MAX_ANGLE_LIMIT_H = 12
-STS_CW_DEAD = 26
-STS_CCW_DEAD = 27
-STS_P_COEF = 21  # Proportional gain (EEPROM, 1 byte, default ~32)
-STS_D_COEF = 22  # Derivative gain   (EEPROM, 1 byte, default ~32)
-STS_I_COEF = 23  # Integral gain     (EEPROM, 1 byte, default 0)
-STS_OFS_L = 31
-STS_OFS_H = 32
-STS_MODE = 33
-
-# -------SRAM(读写)--------
-STS_TORQUE_ENABLE = 40
-STS_ACC = 41
-STS_GOAL_POSITION_L = 42
-STS_GOAL_POSITION_H = 43
-STS_GOAL_TIME_L = 44
-STS_GOAL_TIME_H = 45
-STS_GOAL_SPEED_L = 46
-STS_GOAL_SPEED_H = 47
-STS_LOCK = 55
-
-# -------SRAM(只读)--------
-STS_PRESENT_POSITION_L = 56
-STS_PRESENT_POSITION_H = 57
-STS_PRESENT_SPEED_L = 58
-STS_PRESENT_SPEED_H = 59
-STS_PRESENT_LOAD_L = 60
-STS_PRESENT_LOAD_H = 61
-STS_PRESENT_VOLTAGE = 62
-STS_PRESENT_TEMPERATURE = 63
-STS_STATUS = 65
-STS_MOVING = 66
-STS_PRESENT_CURRENT_L = 69
-STS_PRESENT_CURRENT_H = 70
+from .protocol.registers import *  # noqa: F401,F403
