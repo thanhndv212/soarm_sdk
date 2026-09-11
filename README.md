@@ -6,6 +6,25 @@ protocol via familiar class names (`PortHandler`, `protocol_packet_handler`,
 `sts`, `scscl`, etc.) with a clean module layout compatible with contemporary
 Python tooling.
 
+## Package layout
+
+```
+soarm_sdk/
+├── protocol/     Feetech wire protocol (ports, packets, sync r/w)
+├── bus/          port discovery, diagnostics, servo EEPROM config
+├── robot/        RobotInterface / Robot abstraction + backends (ServoRobot, NullRobot)
+├── calibration/  tick <-> URDF-frame mapping (measurement, seeding, storage)
+├── kinematics/   URDF loading + forward kinematics (no viewer dependency)
+├── trajectory.py waypoint resampling for streaming to a robot
+├── dashboard/    the Viser-based operator dashboard
+└── cli/          console-script entry points (soarm-calibrate, soarm-dashboard, ...)
+```
+
+Every name importable from the flat top level in earlier releases
+(`from soarm_sdk import PortHandler, sts, ...`) still works — see the
+[changelog](CHANGELOG.md) for the one renamed exception
+(`soarm_sdk.calibration`, which now means something different).
+
 ## Installation
 
 ```bash
@@ -86,6 +105,10 @@ The dashboard requires the `viser` extra:
 ```bash
 pip install soarm-sdk[viser]
 ```
+
+Installing the package also gives you these directly on `$PATH` — no
+checkout needed: `soarm-calibrate`, `soarm-calibrate --ui`,
+`soarm-dashboard`, `soarm-dashboard-setup`, `soarm-seed-calibration`.
 
 ## Features
 

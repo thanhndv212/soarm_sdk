@@ -1,12 +1,17 @@
-"""Operation planning and execution for soarm_sdk calibration.
+"""Operation planning and execution for servo EEPROM/register configuration.
 
 Provides data structures and functions to plan and apply a batch of
 servo configuration changes (ID reassignment, angle limits, acceleration,
 speed, torque, operating mode, baud rate) over a serial bus.
 
+Formerly ``soarm_sdk.calibration`` — renamed to live under :mod:`soarm_sdk.bus`
+and free up "calibration" for the URDF-frame mapping in
+:mod:`soarm_sdk.calibration` (ticks <-> the planner's joint frame), a
+distinct concern this module has nothing to do with.
+
 Typical usage
 -------------
->>> from soarm_sdk import apply_plan, OperationPlan, parse_range
+>>> from soarm_sdk.bus import apply_plan, OperationPlan, parse_range
 >>> plan = OperationPlan(
 ...     assign_id={},
 ...     angle_limits={1: (100, 3900)},
@@ -28,10 +33,10 @@ import argparse
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from .bus import scan_servos, write1, write2
-from .port_handler import PortHandler
-from .sts import sts
-from .stservo_def import (
+from .discovery import scan_servos, write1, write2
+from ..protocol.port_handler import PortHandler
+from ..protocol.sts import sts
+from ..protocol.registers import (
     STS_ACC,
     STS_BAUD_RATE,
     STS_GOAL_SPEED_L,

@@ -1,10 +1,9 @@
-"""Forward-kinematics + URDF mesh helpers for the soarm_sdk dashboard.
+"""Viser scene registration for the soarm_sdk dashboard's 3-D view.
 
-No default URDF path lives here deliberately: a URDF is workspace-relative
-(it comes from a sibling ``SO-ARM100/`` checkout, not from anything shipped
-inside this installed package), so callers must supply ``urdf_path``
-explicitly — see ``examples/setup_dashboard.py`` for how the example script
-computes its own default.
+The URDF loading and FK math live in :mod:`soarm_sdk.kinematics.urdf_fk`
+(no Viser dependency there); this module only wires that into a Viser
+scene — registering meshes, then pushing updated transforms onto their
+handles each tick.
 """
 
 from __future__ import annotations
@@ -12,23 +11,18 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
-
 from ..conversions import ticks_to_radians
+from ..kinematics.urdf_fk import URDF_AVAILABLE, link_transforms, load_urdf
 
 try:
-    import trimesh  # noqa: F401 -- imported for yourdfpy side-effects
-    import yourdfpy
-
-    URDF_AVAILABLE = True
-except ImportError:
-    URDF_AVAILABLE = False
+    import trimesh
+except ImportError:  # pragma: no cover -- guarded by URDF_AVAILABLE below
+    trimesh = None  # type: ignore[assignment]
 
 __all__ = [
     "SOARM100_IDS",
     "SOARM100_JOINT_NAMES",
     "URDF_AVAILABLE",
-    "mat3_to_wxyz",
     "load_urdf_meshes",
     "update_fk",
 ]
@@ -42,36 +36,6 @@ SOARM100_JOINT_NAMES: List[str] = [
     "wrist_roll",
     "gripper",
 ]
-
-
-def mat3_to_wxyz(R: np.ndarray) -> np.ndarray:
-    """Convert a 3x3 rotation matrix to a (w, x, y, z) unit quaternion."""
-    trace = R[0, 0] + R[1, 1] + R[2, 2]
-    if trace > 0:
-        s = 0.5 / np.sqrt(trace + 1.0)
-        w = 0.25 / s
-        x = (R[2, 1] - R[1, 2]) * s
-        y = (R[0, 2] - R[2, 0]) * s
-        z = (R[1, 0] - R[0, 1]) * s
-    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
-        s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
-        w = (R[2, 1] - R[1, 2]) / s
-        x = 0.25 * s
-        y = (R[0, 1] + R[1, 0]) / s
-        z = (R[0, 2] + R[2, 0]) / s
-    elif R[1, 1] > R[2, 2]:
-        s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
-        w = (R[0, 2] - R[2, 0]) / s
-        x = (R[0, 1] + R[1, 0]) / s
-        y = 0.25 * s
-        z = (R[1, 2] + R[2, 1]) / s
-    else:
-        s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
-        w = (R[1, 0] - R[0, 1]) / s
-        x = (R[0, 2] + R[2, 0]) / s
-        y = (R[1, 2] + R[2, 1]) / s
-        z = 0.25 * s
-    return np.array([w, x, y, z])
 
 
 def load_urdf_meshes(
@@ -88,21 +52,17 @@ def load_urdf_meshes(
         print("[soarm_sdk.dashboard] yourdfpy/trimesh not installed - no 3-D view.")
         return None, {}
 
-    if not urdf_path.exists():
-        print(f"[soarm_sdk.dashboard] URDF not found: {urdf_path}")
-        return None, {}
-
-    try:
-        urdf = yourdfpy.URDF.load(str(urdf_path), load_meshes=True)
-    except Exception as exc:
-        print(f"[soarm_sdk.dashboard] URDF load failed: {exc}")
+    urdf = load_urdf(urdf_path)
+    if urdf is None:
+        print(f"[soarm_sdk.dashboard] URDF not found or failed to load: {urdf_path}")
         return None, {}
 
     scene = urdf.scene
     mesh_handles: Dict[str, Any] = {}
+    transforms = link_transforms(urdf, {})
 
     for node_name in scene.graph.nodes_geometry:
-        T_world, geom_name = scene.graph[node_name]
+        _, geom_name = scene.graph[node_name]
         geom = scene.geometry.get(geom_name)
         if geom is None:
             continue
@@ -111,12 +71,14 @@ def load_urdf_meshes(
         if not isinstance(geom, trimesh.Trimesh):
             continue
 
-        wxyz = mat3_to_wxyz(T_world[:3, :3])
+        wxyz, position = transforms.get(node_name, (None, None))
+        if wxyz is None:
+            continue
         handle = server.scene.add_mesh_trimesh(
             name=f"/robot/{node_name}",
             mesh=geom,
             wxyz=tuple(wxyz),
-            position=tuple(T_world[:3, 3]),
+            position=tuple(position),
         )
         mesh_handles[node_name] = handle
 
@@ -143,9 +105,10 @@ def update_fk(
     if not cfg:
         return
 
-    urdf.update_cfg(cfg)
-    scene = urdf.scene
+    transforms = link_transforms(urdf, cfg)
     for node_name, handle in mesh_handles.items():
-        T_world, _ = scene.graph[node_name]
-        handle.wxyz = tuple(mat3_to_wxyz(T_world[:3, :3]))
-        handle.position = tuple(T_world[:3, 3])
+        wxyz, position = transforms.get(node_name, (None, None))
+        if wxyz is None:
+            continue
+        handle.wxyz = tuple(wxyz)
+        handle.position = tuple(position)

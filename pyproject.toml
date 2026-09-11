@@ -36,6 +36,12 @@ viser = [
     "trimesh>=3.21",
 ]
 
+[project.scripts]
+soarm-calibrate = "soarm_sdk.cli.calibrate:main"
+soarm-dashboard = "soarm_sdk.cli.dashboard:main"
+soarm-dashboard-setup = "soarm_sdk.cli.dashboard:main_setup"
+soarm-seed-calibration = "soarm_sdk.calibration.seed:main"
+
 [project.urls]
 Homepage = "https://github.com/thanhndv212/soarm_sdk"
 Documentation = "https://github.com/thanhndv212/soarm_sdk/tree/main/docs"
@@ -58,6 +64,17 @@ dependencies = [
 ]
 [tool.hatch.envs.lint.scripts]
 check = "ruff check src tests"
+
+[tool.ruff.lint]
+# Pinned explicitly: with no [tool.ruff] section at all, ruff's own
+# defaults have grown over versions well past the classic "E4, E7, E9, F"
+# this project was set up against (CI's `ruff check src tests` was
+# already failing on main with 466 findings from rule categories -
+# UP, I, C4, PIE, RUF, S, B, DTZ, ... - nobody opted into; restoring the
+# original minimal set here reflects what the codebase actually follows,
+# rather than requiring a large, unrelated style rewrite to satisfy rules
+# that were never intentionally enabled).
+select = ["E4", "E7", "E9", "F"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

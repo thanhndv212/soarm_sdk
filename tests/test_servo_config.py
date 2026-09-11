@@ -1,8 +1,12 @@
-"""Unit tests for soarm_sdk.calibration.
+"""Unit tests for soarm_sdk.bus.servo_config.
 
 Covers the pure planning/parsing logic (OperationPlan construction, ID
 resolution). Deliberately does not exercise apply_plan()/run_calibration(),
 which open a real serial port.
+
+Formerly ``tests/test_calibration.py``, renamed alongside the module's
+move from ``soarm_sdk.calibration`` to ``soarm_sdk.bus.servo_config`` —
+see that module's docstring for why.
 """
 
 from __future__ import annotations
@@ -11,7 +15,7 @@ import argparse
 
 import pytest
 
-from soarm_sdk.calibration import (
+from soarm_sdk.bus.servo_config import (
     OperationPlan,
     build_operation_plan,
     collect_final_ids,

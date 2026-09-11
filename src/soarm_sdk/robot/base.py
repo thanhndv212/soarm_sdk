@@ -3,8 +3,8 @@
 Every robot (simulation or real hardware) inherits from :class:`Robot` and
 implements the handful of methods high-level application code needs. This
 is the single abstraction boundary between *algorithm code* and *hardware
-code* — see :mod:`soarm_sdk.interfaces` for the structural Protocol this
-class satisfies.
+code* — see :mod:`soarm_sdk.robot.interfaces` for the structural Protocol
+this class satisfies.
 
 Design inspired by LeRobot's ``Robot`` + ``RobotConfig`` pattern: one YAML
 config per platform, one Python class per back-end.
@@ -19,6 +19,7 @@ from typing import Any, Dict, Optional, Union
 
 import numpy as np
 
+from .config import validate_robot_config
 from .types import JointState, Pose
 
 try:
@@ -30,7 +31,7 @@ except ImportError:
 
 __all__ = ["Robot", "load_robot_config"]
 
-_CONFIGS_DIR = Path(__file__).parent / "configs"
+_CONFIGS_DIR = Path(__file__).parent.parent / "configs"
 
 
 def load_robot_config(
@@ -74,6 +75,7 @@ class Robot(ABC):
     """
 
     def __init__(self, config: Dict[str, Any]) -> None:
+        validate_robot_config(config)
         self._config = config
         self._n_dof: int = config["n_dof"]
         self._joint_names: list[str] = config["joint_names"]

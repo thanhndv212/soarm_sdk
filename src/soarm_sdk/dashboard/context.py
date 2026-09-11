@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Generator, List, Optional
 
-from ..calibration import parse_range
+from ..bus import parse_range
 from ..port_handler import PortHandler
 from ..stservo_def import (
     COMM_SUCCESS,
