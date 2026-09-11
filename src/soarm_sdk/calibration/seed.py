@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Seed a URDF-frame calibration for an arm, offline.
 
-    python -m soarm_sdk.seed_calibration \
+    soarm-seed-calibration \
         --lerobot ~/.cache/huggingface/lerobot/calibration/robots/so101_follower/thanh_arm.json \
         --out ~/.soarm_sdk/thanh_arm.json
 

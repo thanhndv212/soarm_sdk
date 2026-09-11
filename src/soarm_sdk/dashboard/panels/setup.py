@@ -32,7 +32,7 @@ from ... import (
     write1,
     write2,
 )
-from ...stservo_def import STS_OFS_L
+from ...protocol.registers import STS_OFS_L
 from ..app import Panel
 from ..context import DashboardContext
 

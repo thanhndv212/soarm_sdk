@@ -15,13 +15,13 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Generator, List, Optional
 
 from ..bus import parse_range
-from ..port_handler import PortHandler
-from ..stservo_def import (
+from ..protocol.port_handler import PortHandler
+from ..protocol.registers import (
     COMM_SUCCESS,
     STS_PRESENT_POSITION_L,
     STS_PRESENT_SPEED_L,
 )
-from ..sts import sts as _Sts
+from ..protocol.sts import sts as _Sts
 
 __all__ = ["JointState", "DashboardContext"]
 

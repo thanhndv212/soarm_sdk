@@ -8,7 +8,7 @@ question: *what tick value means zero radians to the URDF?*
 - :mod:`soarm_sdk.calibration.frame` — :class:`RobotCalibration`, the
   persisted tick<->radian mapping, and :func:`seed_from_travel`.
 - :mod:`soarm_sdk.calibration.seed` — seeds a calibration offline from an
-  existing lerobot calibration file (``python -m soarm_sdk.seed_calibration``).
+  existing lerobot calibration file (the ``soarm-seed-calibration`` CLI).
 - :mod:`soarm_sdk.calibration.rom_sweep` — the range-of-motion sweep that
   produces the measured travel :func:`~frame.seed_from_travel` consumes.
 """

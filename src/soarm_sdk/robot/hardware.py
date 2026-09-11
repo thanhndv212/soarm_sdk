@@ -1,7 +1,7 @@
 """Hardware interface for STS3215 servos on the soarm100 arm.
 
-Satisfies :class:`~soarm_sdk.interfaces.RobotInterface` (via
-:class:`~soarm_sdk.servo_robot.ServoRobot`, which wraps this class) so a
+Satisfies :class:`~soarm_sdk.robot.interfaces.RobotInterface` (via
+:class:`~soarm_sdk.robot.servo.ServoRobot`, which wraps this class) so a
 :class:`ServoHardwareInterface`-backed robot can be passed anywhere the
 system expects a robot adapter — on real hardware or a simulation
 equivalent implementing the same Protocol.
@@ -34,7 +34,7 @@ Usage
 -----
 ::
 
-    from soarm_sdk.hardware_interface import ServoHardwareInterface
+    from soarm_sdk.robot.hardware import ServoHardwareInterface
 
     hw = ServoHardwareInterface(
         port="/dev/tty.usbserial-XXXX",
@@ -88,7 +88,7 @@ from .types import JointState
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover
-    from .frame_calibration import RobotCalibration
+    from ..calibration.frame import RobotCalibration
 
 __all__ = ["ServoHardwareInterface"]
 
@@ -405,7 +405,7 @@ class ServoHardwareInterface:
             self._pending_command = cmd
 
     def get_robot_joint_state(self) -> JointState:
-        """Return a full :class:`~soarm_sdk.types.JointState` snapshot.
+        """Return a full :class:`~soarm_sdk.robot.types.JointState` snapshot.
 
         Includes positions, velocities, and efforts (motor currents in mA).
         """

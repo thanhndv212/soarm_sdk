@@ -1,4 +1,4 @@
-"""Unit tests for soarm_sdk.frame_calibration.
+"""Unit tests for soarm_sdk.calibration.frame.
 
 Pure math and file I/O, no hardware. The fixture data is the real
 SO-101 calibration for `thanh_arm` plus the limits from
@@ -13,7 +13,7 @@ import json
 import pytest
 
 from soarm_sdk.conversions import RADS_PER_TICK
-from soarm_sdk.frame_calibration import (
+from soarm_sdk.calibration.frame import (
     RobotCalibration,
     seed_from_lerobot,
     seed_from_travel,

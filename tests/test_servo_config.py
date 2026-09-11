@@ -220,3 +220,41 @@ def test_collect_final_ids_dedupes_and_sorts():
         baud={},
     )
     assert collect_final_ids(plan, {}) == [1, 2, 3]
+
+
+# ---------------------------------------------------------------------------
+# run_calibration --list-ports
+# ---------------------------------------------------------------------------
+
+
+def test_run_calibration_list_ports_import_path(monkeypatch):
+    """--list-ports takes a lazy-import branch no other test reaches.
+
+    It imported ``.bus`` — correct while this module was ``soarm_sdk.calibration``
+    at the top level, but ``soarm_sdk.bus.bus`` once it moved under ``bus/``.
+    Being a function-local import, it stayed silent until someone actually
+    passed --list-ports.
+    """
+    from soarm_sdk.bus import servo_config
+
+    calls = []
+    monkeypatch.setattr(servo_config, "build_operation_plan", lambda a: "PLAN")
+    monkeypatch.setattr(
+        servo_config,
+        "apply_plan",
+        lambda *a, **k: calls.append("applied") or 0,
+    )
+    monkeypatch.setattr(
+        "soarm_sdk.bus.discovery.print_ports", lambda log=None: calls.append("ports")
+    )
+
+    args = _make_args(
+        list_ports=True,
+        device="/dev/null",
+        baud=1_000_000,
+        scan_range="1-1",
+        unlock=False,
+        lock=False,
+    )
+    assert servo_config.run_calibration(args) == 0
+    assert calls == ["ports", "applied"]

@@ -13,8 +13,8 @@ from pathlib import Path
 import pytest
 
 from soarm_sdk import bus
-from soarm_sdk.protocol_packet_handler import PacketResult
-from soarm_sdk.stservo_def import COMM_RX_FAIL, COMM_SUCCESS
+from soarm_sdk.protocol.packet_handler import PacketResult
+from soarm_sdk.protocol.registers import COMM_RX_FAIL, COMM_SUCCESS
 
 
 # ---------------------------------------------------------------------------

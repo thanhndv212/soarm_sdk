@@ -1,4 +1,4 @@
-"""Unit tests for soarm_sdk.servo_robot.ServoRobot.
+"""Unit tests for soarm_sdk.robot.servo.ServoRobot.
 
 Covers construction and pre-connect() behavior only — a real connect()
 opens a serial port and starts a background thread, which needs real
@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from soarm_sdk.interfaces import RobotInterface
-from soarm_sdk.servo_robot import ServoRobot
+from soarm_sdk.robot.interfaces import RobotInterface
+from soarm_sdk.robot.servo import ServoRobot
 
 
 def test_servo_robot_loads_default_config():

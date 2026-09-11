@@ -138,7 +138,7 @@ all servos in one bus transaction (~6× fewer round-trips).
 
 ```python
 from soarm_sdk import PortHandler, sts
-from soarm_sdk.stservo_def import (
+from soarm_sdk.protocol.registers import (
     COMM_SUCCESS, STS_PRESENT_POSITION_L, STS_PRESENT_SPEED_L
 )
 
