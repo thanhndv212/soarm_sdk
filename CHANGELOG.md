@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-12
+
+The package reorganization. Every pre-0.2.0 import path still works here —
+the legacy top-level modules are deprecation shims — so this release is
+adopt-at-your-own-pace. They are removed in 0.3.0.
+
 ### Changed — package reorganization
 
 The flat 20-module top-level namespace is now grouped by layer, each with
