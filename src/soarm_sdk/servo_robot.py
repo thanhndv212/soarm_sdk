@@ -7,11 +7,14 @@ exposes the :class:`~soarm_sdk.robot.Robot` ABC, satisfying
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, TYPE_CHECKING
 
 import numpy as np
 
 from .hardware_interface import ServoHardwareInterface
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .frame_calibration import RobotCalibration
 from .robot import Robot, load_robot_config
 from .types import JointState, Pose
 
@@ -37,12 +40,18 @@ class ServoRobot(Robot):
         config: Optional[Dict[str, Any]] = None,
         *,
         fk_fn: Optional[Callable] = None,
+        calibration: Optional["RobotCalibration"] = None,
+        max_step_rad: Optional[float] = None,
+        enforce_limits: bool = True,
     ) -> None:
         cfg = config or load_robot_config("soarm100")
         super().__init__(cfg)
 
         self._port = port
         self._fk_fn = fk_fn
+        self._calibration = calibration
+        self._max_step_rad = max_step_rad
+        self._enforce_limits = enforce_limits
         self._hw: Optional[ServoHardwareInterface] = None
 
     # -- lifecycle -------------------------------------------------------
@@ -62,6 +71,12 @@ class ServoRobot(Robot):
             default_acc=hw_cfg.get("default_acc", 50),
             state_freq=hw_cfg.get("state_freq", 100),
             fk_fn=self._fk_fn,
+            # The config has always declared joint_limits and nothing ever
+            # read them on the write path. Passing them here is what turns
+            # them from documentation into a guard.
+            joint_limits=self.get_joint_limits() if self._enforce_limits else None,
+            max_step_rad=self._max_step_rad,
+            calibration=self._calibration,
         )
         self._hw.start()
 

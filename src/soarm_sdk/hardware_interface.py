@@ -56,10 +56,11 @@ Notes
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Sequence, TYPE_CHECKING
 
 import numpy as np
 
@@ -74,6 +75,7 @@ from .conversions import (
 from .group_sync_read import GroupSyncRead
 from .port_handler import PortHandler
 from .rate_limiter import RateLimiter
+
 from .sts import sts
 from .stservo_def import (
     COMM_SUCCESS,
@@ -82,6 +84,11 @@ from .stservo_def import (
     STS_TORQUE_ENABLE,
 )
 from .types import JointState
+
+logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .frame_calibration import RobotCalibration
 
 __all__ = ["ServoHardwareInterface"]
 
@@ -149,6 +156,9 @@ class ServoHardwareInterface:
         state_freq: float = 100.0,
         torque_on_start: bool = True,
         fk_fn: Optional[Callable[[np.ndarray], tuple[np.ndarray, np.ndarray]]] = None,
+        joint_limits: Optional[tuple[Sequence[float], Sequence[float]]] = None,
+        max_step_rad: Optional[float] = None,
+        calibration: Optional["RobotCalibration"] = None,
     ) -> None:
         self._port = port
         self._baud = baud
@@ -163,6 +173,41 @@ class ServoHardwareInterface:
         self._state_freq = state_freq
         self._torque_on_start = torque_on_start
         self._fk_fn = fk_fn
+
+        # A calibration supplies zero_offsets/direction_signs together and
+        # overrides them, so the two can never be set from different sources
+        # and drift apart.
+        self._calibration = calibration
+        if calibration is not None:
+            if len(calibration.joints) != n:
+                raise ValueError(
+                    f"calibration has {len(calibration.joints)} joints, "
+                    f"interface has {n}"
+                )
+            self._zero_offsets = list(calibration.zero_offsets)
+            self._direction_signs = list(calibration.direction_signs)
+
+        # Safety. Both default to off so existing callers are unaffected,
+        # but soarm100 config supplies limits and callers streaming a
+        # planned trajectory should set max_step_rad.
+        if joint_limits is not None:
+            lo, hi = joint_limits
+            if len(lo) != n or len(hi) != n:
+                raise ValueError(f"joint_limits must have {n} entries per side")
+            if any(a >= b for a, b in zip(lo, hi)):
+                raise ValueError("every joint_limits lower must be below its upper")
+            self._limit_lo: Optional[List[float]] = [float(v) for v in lo]
+            self._limit_hi: Optional[List[float]] = [float(v) for v in hi]
+        else:
+            self._limit_lo = None
+            self._limit_hi = None
+
+        if max_step_rad is not None and max_step_rad <= 0:
+            raise ValueError("max_step_rad must be positive")
+        self._max_step_rad = max_step_rad
+
+        self._limit_clamps = 0
+        self._step_clamps = 0
 
         # Servo bus objects — initialised in start()
         self._ph: Optional[PortHandler] = None
@@ -247,6 +292,67 @@ class ServoHardwareInterface:
         rads = joint_ticks_to_radians(ticks, self._zero_offsets, self._direction_signs)
         return np.array(rads, dtype=float)
 
+    def _apply_safety(self, target: np.ndarray) -> np.ndarray:
+        """Clamp a commanded target to the joint limits and the step bound.
+
+        Both clamps are deliberately *clamps* and not refusals. A refusal
+        mid-trajectory leaves the arm wherever it was, which is rarely safer
+        than moving a little less far than asked; and a planner that wants
+        strict rejection can compare against get_joint_limits() first. What
+        matters is that neither silently succeeds — every clamp is counted,
+        and the counters are part of the public surface so a caller can
+        assert on them after a run.
+
+        The step bound is measured against the last *measured* position, not
+        the last commanded one, so a joint that is lagging its target cannot
+        accumulate an ever-larger jump.
+        """
+        out = np.asarray(target, dtype=float).copy()
+        if out.shape != (len(self._joint_ids),):
+            raise ValueError(
+                f"expected {len(self._joint_ids)} joint values, got {out.shape}"
+            )
+
+        if self._limit_lo is not None and self._limit_hi is not None:
+            lo = np.asarray(self._limit_lo)
+            hi = np.asarray(self._limit_hi)
+            clamped = np.clip(out, lo, hi)
+            n = int(np.count_nonzero(~np.isclose(clamped, out, atol=1e-9)))
+            if n:
+                self._limit_clamps += n
+                logger.warning(
+                    "joint limit clamp on %d joint(s): %s -> %s",
+                    n, np.round(out, 4), np.round(clamped, 4),
+                )
+            out = clamped
+
+        if self._max_step_rad is not None:
+            current = self.get_robot_joint_positions()
+            delta = out - current
+            over = np.abs(delta) > self._max_step_rad
+            if over.any():
+                self._step_clamps += int(over.sum())
+                logger.warning(
+                    "step clamp on %d joint(s): max |delta| %.4f > %.4f rad",
+                    int(over.sum()), float(np.abs(delta).max()), self._max_step_rad,
+                )
+                out = current + np.clip(delta, -self._max_step_rad, self._max_step_rad)
+
+        return out
+
+    @property
+    def limit_clamps(self) -> int:
+        """Joint-limit clamps applied since start. Non-zero means a caller
+        asked for a pose this arm cannot reach."""
+        return self._limit_clamps
+
+    @property
+    def step_clamps(self) -> int:
+        """Step-size clamps applied since start. Non-zero during a
+        trajectory replay means it is being sent faster than max_step_rad
+        allows, and the arm is lagging the plan."""
+        return self._step_clamps
+
     def set_robot_joint_positions(
         self,
         positions: np.ndarray,
@@ -275,6 +381,8 @@ class ServoHardwareInterface:
             Override default acceleration.
         """
         accel = acc if acc is not None else self._default_acc
+
+        positions = self._apply_safety(np.asarray(positions, dtype=float))
 
         ticks_list = joint_radians_to_ticks(
             list(positions), self._zero_offsets, self._direction_signs
