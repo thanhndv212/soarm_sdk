@@ -1,5 +1,5 @@
 # SO-ARM100 robot configuration — consumed by soarm_sdk.robot.load_robot_config()
-# and soarm_sdk.servo_robot.ServoRobot.
+# and soarm_sdk.robot.servo.ServoRobot.
 #
 # Trimmed to the fields this package's Robot/ServoRobot classes actually
 # read. The upstream fullstack-manip version of this file also carries

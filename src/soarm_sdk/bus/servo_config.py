@@ -487,7 +487,7 @@ def run_calibration(
 
     logger = log or print
     if getattr(args, "list_ports", False):
-        from .bus import print_ports
+        from .discovery import print_ports
         print_ports(log=logger)
 
     plan = build_operation_plan(args)

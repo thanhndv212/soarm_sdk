@@ -1,4 +1,4 @@
-"""Unit tests for soarm_sdk.protocol_packet_handler.
+"""Unit tests for soarm_sdk.protocol.packet_handler.
 
 Exercises packet framing and checksum computation against fake port-handler
 doubles — no real serial hardware involved.
@@ -8,14 +8,14 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from soarm_sdk.protocol_packet_handler import (
+from soarm_sdk.protocol.packet_handler import (
     PKT_ERROR,
     PKT_ID,
     PKT_INSTRUCTION,
     PKT_LENGTH,
     ProtocolPacketHandler,
 )
-from soarm_sdk.stservo_def import (
+from soarm_sdk.protocol.registers import (
     COMM_PORT_BUSY,
     COMM_RX_CORRUPT,
     COMM_RX_TIMEOUT,

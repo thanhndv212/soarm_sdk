@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from soarm_sdk.robot import Robot, load_robot_config
-from soarm_sdk.types import JointState, Pose
+from soarm_sdk.robot.types import JointState, Pose
 
 _TEST_CONFIG = {
     "n_dof": 2,

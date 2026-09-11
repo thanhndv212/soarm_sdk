@@ -10,7 +10,7 @@ import numpy as np
 
 from soarm_sdk.robot.interfaces import RobotInterface
 from soarm_sdk.robot.null import NullRobot
-from soarm_sdk.types import Pose
+from soarm_sdk.robot.types import Pose
 
 
 def _config():

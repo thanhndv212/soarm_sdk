@@ -44,14 +44,40 @@ needs updating, and only for the servo-config names.
 
 ### Deprecated
 
-The following top-level modules are now thin re-export shims over their
-new subpackage location, kept for backward compatibility — no import
-using them needs to change, but new code should prefer the paths under
-"Changed" above: `port_handler`, `protocol_packet_handler`,
-`group_sync_read`, `group_sync_write`, `sts`, `scscl`, `stservo_def`,
-`types`, `interfaces`, `hardware_interface`, `servo_robot`,
-`frame_calibration`, `seed_calibration` (including
-`python -m soarm_sdk.seed_calibration`, still supported).
+The following top-level modules are now thin re-export shims over their new
+subpackage location, and **emit a `DeprecationWarning` on import naming
+their replacement**. They still work — no import using them is broken — but
+they are **scheduled for removal in 0.3.0**:
+
+| Deprecated | Use instead |
+|---|---|
+| `soarm_sdk.port_handler` | `soarm_sdk.protocol.port_handler` |
+| `soarm_sdk.protocol_packet_handler` | `soarm_sdk.protocol.packet_handler` |
+| `soarm_sdk.group_sync_read` | `soarm_sdk.protocol.group_sync_read` |
+| `soarm_sdk.group_sync_write` | `soarm_sdk.protocol.group_sync_write` |
+| `soarm_sdk.sts` | `soarm_sdk.protocol.sts` |
+| `soarm_sdk.scscl` | `soarm_sdk.protocol.scscl` |
+| `soarm_sdk.stservo_def` | `soarm_sdk.protocol.registers` |
+| `soarm_sdk.types` | `soarm_sdk.robot.types` |
+| `soarm_sdk.interfaces` | `soarm_sdk.robot.interfaces` |
+| `soarm_sdk.hardware_interface` | `soarm_sdk.robot.hardware` |
+| `soarm_sdk.servo_robot` | `soarm_sdk.robot.servo` |
+| `soarm_sdk.frame_calibration` | `soarm_sdk.calibration.frame` |
+| `soarm_sdk.seed_calibration` | `soarm_sdk.calibration.seed` |
+| `python -m soarm_sdk.seed_calibration` | `soarm-seed-calibration` |
+
+Importing from the top-level `soarm_sdk` namespace is **not** deprecated and
+never warns — `from soarm_sdk import ServoRobot, RobotCalibration, ...` stays
+the recommended entry point.
+
+Python hides `DeprecationWarning` by default outside `__main__`; run with
+`python -W default::DeprecationWarning` (or under pytest, which shows them)
+to see which call sites still need updating.
+
+Nothing inside the package, its tests, or any package in this workspace
+imports through a shim any more — `tests/test_deprecated_shims.py` asserts
+that importing `soarm_sdk` emits no deprecation warnings of its own, so the
+only warnings you can see are from your own code.
 
 ### Added
 
@@ -150,6 +176,16 @@ using them needs to change, but new code should prefer the paths under
 
 ### Fixed
 
+- **`run_calibration(args)` crashed with `ModuleNotFoundError` when
+  `--list-ports` was passed** (so `soarm-calibrate --list-ports` was broken).
+  The reorganization moved this module under `bus/`, which silently changed
+  what its function-local `from .bus import print_ports` resolved to. Being a
+  lazy import inside a rarely-taken branch, nothing caught it until every
+  relative import in the package was resolved against the filesystem; now
+  covered by a regression test.
+- **A `TYPE_CHECKING` import in `robot/hardware.py` pointed at
+  `soarm_sdk.robot.frame_calibration`**, which does not exist. Invisible at
+  runtime (the branch never executes) but wrong for any type checker.
 - Removed unused imports in `calibration.py` (now `bus/servo_config.py`)
   (`Iterable`, `discover_servos`, `COMM_SUCCESS`) flagged by
   `ruff check src`, which had never been run in CI.

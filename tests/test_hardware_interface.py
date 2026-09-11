@@ -1,4 +1,4 @@
-"""Unit tests for soarm_sdk.hardware_interface.ServoHardwareInterface.
+"""Unit tests for soarm_sdk.robot.hardware.ServoHardwareInterface.
 
 Covers pure logic reachable without an open serial port: state caching,
 tick<->radian conversion round trips, and command-buffer constructon.
@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from soarm_sdk.hardware_interface import ServoHardwareInterface
+from soarm_sdk.robot.hardware import ServoHardwareInterface
 
 
 def test_state_age_is_infinite_before_first_read():
@@ -190,7 +190,7 @@ def test_wrong_length_target_is_rejected():
 def test_calibration_supplies_offsets_and_signs_together():
     """Passing a calibration must override both, so the two cannot be set
     from different sources and disagree."""
-    from soarm_sdk.frame_calibration import seed_from_travel
+    from soarm_sdk.calibration.frame import seed_from_travel
 
     cal = seed_from_travel(
         names=["a", "b"],
@@ -205,7 +205,7 @@ def test_calibration_supplies_offsets_and_signs_together():
 
 
 def test_calibration_joint_count_must_match():
-    from soarm_sdk.frame_calibration import seed_from_travel
+    from soarm_sdk.calibration.frame import seed_from_travel
 
     cal = seed_from_travel(["a"], [(-1.0, 1.0)], [(1000, 3000)])
     with pytest.raises(ValueError, match="calibration has 1 joints"):

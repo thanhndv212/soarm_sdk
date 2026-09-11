@@ -302,7 +302,7 @@ def write2(
     servo_id:
         Target servo ID.
     address:
-        Register address (e.g. :data:`~soarm_sdk.stservo_def.STS_MIN_ANGLE_LIMIT_L`).
+        Register address (e.g. :data:`~soarm_sdk.protocol.registers.STS_MIN_ANGLE_LIMIT_L`).
     value:
         Integer value to write.
     label:
@@ -339,7 +339,7 @@ def write1(
     servo_id:
         Target servo ID.
     address:
-        Register address (e.g. :data:`~soarm_sdk.stservo_def.STS_TORQUE_ENABLE`).
+        Register address (e.g. :data:`~soarm_sdk.protocol.registers.STS_TORQUE_ENABLE`).
     value:
         Integer value to write.
     label:

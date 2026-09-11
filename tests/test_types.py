@@ -1,11 +1,11 @@
-"""Unit tests for soarm_sdk.types."""
+"""Unit tests for soarm_sdk.robot.types."""
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from soarm_sdk.types import JointState, Pose
+from soarm_sdk.robot.types import JointState, Pose
 
 
 def test_pose_identity():

@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from ... import COMM_SUCCESS, STS_LOCK, STS_TORQUE_ENABLE, write1
-from ...stservo_def import STS_D_COEF, STS_I_COEF, STS_P_COEF
+from ...protocol.registers import STS_D_COEF, STS_I_COEF, STS_P_COEF
 from ..app import Panel
 from ..context import DashboardContext
 
