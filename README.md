@@ -24,11 +24,10 @@ Every name importable from the flat top level in earlier releases
 (`from soarm_sdk import PortHandler, sts, ...`) still works, and that
 top-level namespace is the recommended entry point.
 
-The old *submodule* paths (`soarm_sdk.servo_robot`, `soarm_sdk.stservo_def`,
-...) also still work, but now emit a `DeprecationWarning` naming their
-replacement and are **scheduled for removal in 0.3.0** — see the
-[changelog](CHANGELOG.md) for the full mapping, plus the one renamed
-exception (`soarm_sdk.calibration`, which now means something different).
+The pre-0.2.0 *submodule* paths (`soarm_sdk.servo_robot`,
+`soarm_sdk.stservo_def`, ...) were deprecated in 0.2.0 and **removed in
+0.3.0**. If you are coming from 0.1.x, the [changelog](CHANGELOG.md) has the
+full old → new mapping.
 
 ## Installation
 
