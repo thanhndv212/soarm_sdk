@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-12
+
+### Removed
+
+**The legacy top-level import paths deprecated in 0.2.0 are gone.** Each was
+a re-export shim over its new home; they warned on import for one release and
+have now been deleted:
+
+| Removed | Use instead |
+|---|---|
+| `soarm_sdk.port_handler` | `soarm_sdk.protocol.port_handler` |
+| `soarm_sdk.protocol_packet_handler` | `soarm_sdk.protocol.packet_handler` |
+| `soarm_sdk.group_sync_read` | `soarm_sdk.protocol.group_sync_read` |
+| `soarm_sdk.group_sync_write` | `soarm_sdk.protocol.group_sync_write` |
+| `soarm_sdk.sts` | `soarm_sdk.protocol.sts` |
+| `soarm_sdk.scscl` | `soarm_sdk.protocol.scscl` |
+| `soarm_sdk.stservo_def` | `soarm_sdk.protocol.registers` |
+| `soarm_sdk.types` | `soarm_sdk.robot.types` |
+| `soarm_sdk.interfaces` | `soarm_sdk.robot.interfaces` |
+| `soarm_sdk.hardware_interface` | `soarm_sdk.robot.hardware` |
+| `soarm_sdk.servo_robot` | `soarm_sdk.robot.servo` |
+| `soarm_sdk.frame_calibration` | `soarm_sdk.calibration.frame` |
+| `soarm_sdk.seed_calibration` | `soarm_sdk.calibration.seed` |
+| `python -m soarm_sdk.seed_calibration` | `soarm-seed-calibration` |
+
+**The top-level namespace is unaffected**, and remains the recommended entry
+point: `from soarm_sdk import ServoRobot, RobotCalibration, Pose, ...` works
+exactly as before. Only direct submodule imports of the old paths break, and
+only if you had not already moved them — `ImportError` /
+`ModuleNotFoundError` names the module, and the table above gives the
+replacement.
+
+Also removed: `tests/test_deprecated_shims.py`, which existed only to pin the
+shims' behaviour.
+
+Nothing in this workspace needed changing for this release: `soarm_tamp` and
+`m5teleop` moved to the canonical paths in 0.2.0 and pass untouched against
+0.3.0.
+
 ## [0.2.0] - 2026-09-12
 
 The package reorganization. Every pre-0.2.0 import path still works here —
