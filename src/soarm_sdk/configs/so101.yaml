@@ -1,5 +1,11 @@
-# SO-ARM100 robot configuration — consumed by soarm_sdk.robot.load_robot_config()
+# SO-101 robot configuration — consumed by soarm_sdk.robot.load_robot_config()
 # and soarm_sdk.robot.servo.ServoRobot.
+#
+# The SO-101 is the revision physically present in this workspace. It shares
+# the SO-100's servo layout and joint count; the limits below come from
+# SO-ARM100/Simulation/SO101/so101_new_calib.urdf, which is the revision
+# soarm_tamp and soarm_mjlab also reference. Prefer this config over
+# soarm100.yaml for real-arm work.
 #
 # Trimmed to the fields this package's Robot/ServoRobot classes actually
 # read. The upstream fullstack-manip version of this file also carries
@@ -7,8 +13,8 @@
 # not applicable here, so left out rather than shipped as unused/misleading
 # config.
 
-name: soarm100
-description: "6-DOF Feetech STS3215 servo arm with 1-DOF jaw gripper"
+name: so101
+description: "SO-101: 6-DOF Feetech STS3215 servo arm with 1-DOF jaw gripper"
 
 # Order matches servo IDs 1-6.
 n_dof: 6

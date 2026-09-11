@@ -65,6 +65,7 @@ from typing import Callable, List, Optional, Sequence, TYPE_CHECKING
 import numpy as np
 
 from ..conversions import (
+    RADS_PER_TICK,
     SOARM100_DIRECTION_SIGNS,
     TICK_ZERO,
     joint_radians_to_ticks,
@@ -86,6 +87,11 @@ from ..protocol.registers import (
 from .types import JointState
 
 logger = logging.getLogger(__name__)
+
+#: Below half an encoder tick, a clamp cannot change what the servo does:
+#: the commanded value and the clamped value land on the same tick. Used as
+#: the threshold for *counting* a limit clamp, not for applying it.
+_CLAMP_EPS_RAD = RADS_PER_TICK / 2.0
 
 if TYPE_CHECKING:  # pragma: no cover
     from ..calibration.frame import RobotCalibration
@@ -317,7 +323,14 @@ class ServoHardwareInterface:
             lo = np.asarray(self._limit_lo)
             hi = np.asarray(self._limit_hi)
             clamped = np.clip(out, lo, hi)
-            n = int(np.count_nonzero(~np.isclose(clamped, out, atol=1e-9)))
+            # Clip always; only *count* an excursion the hardware could
+            # actually express. A planner that plans right up to a joint
+            # limit emits waypoints that round a hair past it — real
+            # trajectories here overshoot by 0.03 of an encoder tick — and
+            # counting those as limit hits makes the counter cry wolf at
+            # arithmetic, which is worse than useless when its whole job is
+            # to say "the plan asked for a pose this arm cannot reach".
+            n = int(np.count_nonzero(~np.isclose(clamped, out, atol=_CLAMP_EPS_RAD)))
             if n:
                 self._limit_clamps += n
                 logger.warning(

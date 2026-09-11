@@ -71,14 +71,39 @@ class ServoRobot(Robot):
             default_acc=hw_cfg.get("default_acc", 50),
             state_freq=hw_cfg.get("state_freq", 100),
             fk_fn=self._fk_fn,
-            # The config has always declared joint_limits and nothing ever
-            # read them on the write path. Passing them here is what turns
-            # them from documentation into a guard.
-            joint_limits=self.get_joint_limits() if self._enforce_limits else None,
+            joint_limits=self.effective_joint_limits() if self._enforce_limits else None,
             max_step_rad=self._max_step_rad,
             calibration=self._calibration,
         )
         self._hw.start()
+
+    def effective_joint_limits(self) -> tuple[np.ndarray, np.ndarray]:
+        """The limits actually enforced on every write.
+
+        The config's declared limits, **intersected with the arm's measured
+        travel** when a calibration is supplied. Hardware wins on the tight
+        side: a config is a model's opinion about the joint, while the
+        measured range is where the mechanism physically stops, and a
+        command must never be driven past the latter.
+
+        Without a calibration this is just the config's limits — the only
+        bound available, and the reason a calibration is worth having before
+        streaming anything open-loop.
+        """
+        lo, hi = self.get_joint_limits()
+        if self._calibration is None:
+            return lo, hi
+
+        cal_lo, cal_hi = self._calibration.reachable_limits()
+        if len(cal_lo) != len(lo):
+            raise ValueError(
+                f"calibration covers {len(cal_lo)} joints, config declares "
+                f"{len(lo)} — they must describe the same arm"
+            )
+        return (
+            np.maximum(lo, np.asarray(cal_lo, dtype=np.float64)),
+            np.minimum(hi, np.asarray(cal_hi, dtype=np.float64)),
+        )
 
     def disconnect(self) -> None:
         if self._hw is not None:

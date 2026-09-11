@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The enforced joint limits were in the wrong frame for two joints, and
+  would have silently truncated real trajectories.**
+  `configs/soarm100.yaml` declared `shoulder_lift` offset by −π/2 and
+  `elbow_flex` by +π/2 relative to the URDF, while the other four matched
+  it. The joint *travel* was right — only the zero it was measured from was
+  wrong. Inert while nothing read those numbers; 0.2.0 began enforcing them
+  on every write, at which point a planner commanding URDF-frame angles had
+  **55% of a trajectory (200 of 366 commands) clamped at `shoulder_lift`**,
+  which on hardware means the arm quietly stops following the plan. Limits
+  in both configs are now taken from
+  `SO-ARM100/Simulation/SO101/so101_new_calib.urdf`.
+- **A clamp counter that cried wolf at arithmetic.** Clamps were counted
+  with `atol=1e-9`, so a planner planning right up to a joint limit — whose
+  waypoints round a hair past it, by 0.03 of an encoder tick in real
+  trajectories here — registered as limit hits. An excursion smaller than
+  half a tick cannot change what the servo does, and is no longer counted.
+  Clamping itself is unchanged.
+
+### Added
+
+- **`ServoRobot` enforces the arm's measured travel, not just the config.**
+  `effective_joint_limits()` intersects the declared limits with
+  `RobotCalibration.reachable_limits()` when a calibration is supplied, so
+  the physical hard stops always win on the tight side — a config is a
+  model's opinion about a joint, the measured range is where the mechanism
+  actually stops. Without a calibration, behaviour is unchanged.
+- `JointCalibration.reachable_rad` / `RobotCalibration.reachable_limits()` —
+  measured tick travel expressed in URDF radians, ordered correctly for a
+  negative direction sign.
+- `configs/so101.yaml` — the revision physically present in this workspace.
+  Same limits as `soarm100.yaml`; prefer it for real-arm work.
+
+### Changed
+
+- **`joint_names` in both configs now use the URDF's names**
+  (`shoulder_pan`, `shoulder_lift`, ...) instead of the servo/assembly
+  labels (`Rotation`, `Pitch`, ...), which matched neither URDF. The SDK
+  already used URDF names in `dashboard/fk.py`, and lerobot, soarm_mjlab and
+  soarm_tamp all use them too, so this was the odd one out. The servo labels
+  survive as per-line comments, which is where the ID mapping actually
+  belongs. Nothing read these strings, only their count.
+
 ## [0.3.0] - 2026-09-12
 
 ### Removed
