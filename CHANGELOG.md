@@ -7,8 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **One launcher for the calibration CLIs.** `examples/` carried
+  `calibrate.py` and `calibrate_arm.py`, two near-identical `sys.path`
+  shims whose names gave no hint that they start unrelated tools — one
+  configures servos on the wire (IDs, EEPROM angle limits, speed), the
+  other drives the joints into their hard stops and writes the arm's
+  URDF-frame calibration. They are now named modes of a single
+  `examples/calibrate.py`: `bus` and `rom`. The mode is spliced into
+  `sys.argv[0]` before dispatch, so each tool's own `--help` advertises a
+  command line that works. Seeding offline stays out of it:
+  `soarm_sdk.calibration.seed.main()` takes no argv, so it does not
+  forward cleanly — `soarm-seed-calibration` remains its entry point.
+
 ### Fixed
 
+- **`soarm-calibrate --list-ports` ran a calibration afterwards.** The flag
+  is a query, but `main()` printed the ports and then fell through into
+  `run_calibration()`, which opens `--device` — default `/dev/ttyUSB0` —
+  and raised `SerialException` on any machine that only wanted to know
+  which ports exist. The list also printed twice, since `run_calibration`
+  prints it again for callers that pass the flag in a `Namespace`. It now
+  prints once and returns 0. Covered by `tests/test_calibrate_cli.py`,
+  which also pins that the early return is scoped to the flag and that a
+  bad configuration still exits 2 with a message rather than a traceback.
 - **The enforced joint limits were in the wrong frame for two joints, and
   would have silently truncated real trajectories.**
   `configs/soarm100.yaml` declared `shoulder_lift` offset by −π/2 and
@@ -27,8 +50,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   half a tick cannot change what the servo does, and is no longer counted.
   Clamping itself is unchanged.
 
+### Fixed
+
+- **The Homing Wizard's Apply wrote the homing offset with the wrong sign.**
+  The servo reports `raw - STS_OFS`, so centring a joint's swept midpoint on
+  `target_ref` needs `zero - target_ref`; `setup.py` wrote `target_ref - zero`,
+  which moved the joint's frame away from centre by exactly what should have
+  brought it back — and silently, since nothing reads the offset afterwards.
+  The angle limits it wrote alongside were already correct and are unchanged
+  in effect. The arithmetic now lives in
+  `soarm_sdk.calibration.recentre.centring_offset`, with the sign pinned by a
+  test rather than by a comment. Apply also now refuses to write an offset for
+  a joint whose sweep looks wrapped, instead of deriving one from a range that
+  is the encoder's rather than the joint's.
+- **Torque could not be released.** `ServoHardwareInterface` had no torque
+  control at all, so anything needing a back-driveable arm — checking a
+  calibration's direction signs by hand, releasing a servo that has tripped
+  its overload protection against a stop — had no option but cutting the
+  supply, which takes the bus down with it. `set_torque()` /
+  `disable_torque()` / `enable_torque()` are queued onto the bus thread that
+  owns the port (a caller-thread write would interleave with its sync-read
+  packets) and block until applied. Re-enabling parks the goal at the
+  measured pose first, so an arm moved by hand while limp does not lurch, and
+  a command queued before going limp is discarded rather than executed on the
+  way back up.
+- **A ROM sweep measures a different joint frame than the runtime reads, so
+  every calibration derived from one was out by that joint's homing offset.**
+  While a joint is driving in wheel mode the STS3215 reports the *raw*
+  encoder, with `STS_OFS` not applied; in servo mode it reports
+  `raw - STS_OFS`. The position visibly jumps by exactly the offset the
+  moment wheel-mode motion starts (measured: +903 on `shoulder_lift`, whose
+  offset was 903) and jumps back on the return to servo mode. `run_rom_sweep`
+  records min/max of the reported position, so its travel range is in the raw
+  frame while `ServoRobot` reads the offset-applied one. On the arm here that
+  displaced four of six joint zeros by 139–880 ticks (0.2–1.4 rad).
+- **A sweep's min/max cannot measure a joint whose travel crosses 4095/0.**
+  The reported position wraps, so the recorded range is the encoder's
+  (`0..4095`), not the joint's — `shoulder_lift` measured 4095 ticks against a
+  URDF travel of 2275, a span ratio of 1.80. Travel is now measured by
+  accumulating displacement, treating a jump over half the encoder as a wrap,
+  and anchoring the total to a settled servo-mode reading. The same joint then
+  measured 2449 ticks, ratio 1.076.
+- **A position read taken straight after a mode switch or an EEPROM write can
+  still be in the previous frame**, which silently mis-anchors an entire
+  joint's calibration. Reads that anchor a measurement now wait for
+  consecutive agreeing samples.
+
 ### Added
 
+- **`soarm-calibrate-rom` — measure an arm's travel and write its
+  calibration in one command.** The pieces existed but nothing joined
+  them: the ROM sweep lived behind the dashboard's Homing Wizard (which
+  writes servo EEPROM and no calibration file), and the only producer of
+  `~/.soarm_sdk/calibration.json` was `soarm-seed-calibration`, which
+  borrows travel ranges from a lerobot file rather than measuring them.
+  This CLI runs `run_rom_sweep` against the hardware, feeds the result to
+  `seed_from_travel`, and saves — so an arm with no lerobot calibration, or
+  one that has been re-assembled, can be calibrated from the hard stops
+  themselves. Joint names, servo IDs and URDF limits all come from the
+  robot config, so the ordering cannot drift from `ServoRobot`'s. Records
+  the raw sweep under `notes["sweep"]`, flags any direction that timed out
+  instead of stalling, and — like the seeding CLI — writes
+  `validated: false`, because a travel range still cannot settle the
+  direction signs. `examples/calibrate.py rom` runs it from a checkout.
+- **`seed_from_travel(direction_signs=...)`** — seed a joint whose direction
+  has actually been measured. The sign is not a cosmetic flag over the same
+  zero: it decides which end of the measured travel is the URDF's *lower*
+  limit, so it changes the zero the two endpoints agree on. Flipping only the
+  field leaves the joint mirrored about the wrong point — on this arm's
+  `wrist_roll` that is a 63.5-tick (0.097 rad) error, small enough to look
+  plausible and be wrong everywhere.
+- **`--joints` sweeps part of an arm and merges the result into the existing
+  calibration**, so a heavy arm can be done one joint at a time with the
+  numbers checked between runs. Joints never swept are listed under
+  `notes["incomplete"]` and the file is short a joint until they are, which
+  `soarm_tamp.conventions.check_ready` already refuses to drive.
+- **`soarm_sdk.calibration.recentre` and `--recentre`** — move a servo's
+  homing offset so its travel is centred at tick 2048 and reset its angle
+  limits to the measured stops. Required for a joint whose travel straddles
+  the encoder wrap, which no linear tick-to-radian mapping can describe.
+  Note the sign: the servo reports `raw - STS_OFS`, so the offset moves the
+  reported frame *opposite* to the intuitive direction; the wrong sign moves
+  a joint's frame away from centre by exactly what should have brought it
+  back. `notes["recentred"]` keeps the previous offset so the change is
+  reversible.
 - **`ServoRobot` enforces the arm's measured travel, not just the config.**
   `effective_joint_limits()` intersects the declared limits with
   `RobotCalibration.reachable_limits()` when a calibration is supplied, so

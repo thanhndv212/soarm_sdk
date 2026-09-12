@@ -231,6 +231,10 @@ class ServoHardwareInterface:
         # Pending write command — filled by control thread, drained by bus thread
         self._cmd_lock = threading.Lock()
         self._pending_command: Optional[_CommandBuffer] = None
+        # Torque requests take the same route: the bus thread owns the port,
+        # so a caller-thread write would interleave with its sync-read packets.
+        self._pending_torque: Optional[bool] = None
+        self._torque_enabled: bool = torque_on_start
 
         self._thread: Optional[threading.Thread] = None
         self._running = False
@@ -494,15 +498,89 @@ class ServoHardwareInterface:
         rate = RateLimiter(frequency=self._state_freq, warn=False)
         while self._running:
             self._read_once()
+            self._apply_pending_torque()  # before the write: a limp joint takes no goal
             self._write_if_pending()  # serial: write only after read, bus is free
             rate.sleep()
+
+    # ------------------------------------------------------------------
+    # Torque
+    # ------------------------------------------------------------------
+
+    @property
+    def torque_enabled(self) -> bool:
+        """Whether torque was last commanded on. Not read back from the servos."""
+        return self._torque_enabled
+
+    def set_torque(self, enabled: bool, *, timeout_s: float = 2.0) -> None:
+        """Enable or disable torque on every joint, and wait until it lands.
+
+        Disabling torque is what makes a joint back-driveable — needed to
+        check a calibration's direction signs by hand, and the way to release
+        a servo that has tripped its overload protection while pressed against
+        a stop. Cutting the supply instead would take the bus down with it,
+        leaving nothing to read the joint angles the check depends on.
+
+        Blocking, unlike :meth:`set_robot_joint_positions`: a caller that is
+        about to tell someone the arm is safe to move needs to know the servos
+        were actually told, not that a request was queued.
+        """
+        enabled = bool(enabled)
+        with self._cmd_lock:
+            self._pending_torque = enabled
+            if not enabled:
+                # A queued move must not outlive the decision to go limp.
+                self._pending_command = None
+
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            with self._cmd_lock:
+                if self._pending_torque is None and self._torque_enabled == enabled:
+                    return
+            time.sleep(0.01)
+        raise RuntimeError(
+            f"torque {'enable' if enabled else 'disable'} not applied within "
+            f"{timeout_s:.1f}s — is the bus thread running?"
+        )
+
+    def disable_torque(self, *, timeout_s: float = 2.0) -> None:
+        """Go limp. See :meth:`set_torque`."""
+        self.set_torque(False, timeout_s=timeout_s)
+
+    def enable_torque(self, *, timeout_s: float = 2.0) -> None:
+        """Hold station at the current measured pose. See :meth:`set_torque`."""
+        self.set_torque(True, timeout_s=timeout_s)
+
+    def _apply_pending_torque(self) -> None:
+        """Drain a queued torque request. Runs on the bus thread only."""
+        with self._cmd_lock:
+            want = self._pending_torque
+        if want is None or self._srv is None:
+            return
+
+        if want:
+            # Re-enabling: park the goal at where the joint actually *is*, or
+            # the servo drives to whatever it was chasing when torque was cut
+            # — which, after the arm has been moved by hand, is a lurch.
+            with self._lock:
+                ticks = list(self._cached_positions_ticks)
+            self._srv.groupSyncWrite.clearParam()
+            for sid, t in zip(self._joint_ids, ticks):
+                self._srv.SyncWritePosEx(sid, t, self._default_speed, self._default_acc)
+            self._srv.groupSyncWrite.txPacket()
+
+        for sid in self._joint_ids:
+            self._srv.write1ByteTxRx(sid, STS_TORQUE_ENABLE, 1 if want else 0)
+
+        with self._cmd_lock:
+            self._torque_enabled = want
+            self._pending_torque = None
 
     def _write_if_pending(self) -> None:
         """Drain the pending command buffer and send one sync-write packet."""
         with self._cmd_lock:
             cmd = self._pending_command
             self._pending_command = None
-        if cmd is None or self._srv is None:
+        if cmd is None or self._srv is None or not self._torque_enabled:
             return
         self._srv.groupSyncWrite.clearParam()
         for sid, ticks, spd in zip(self._joint_ids, cmd.ticks_list, cmd.speed_ticks_list):

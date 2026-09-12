@@ -76,6 +76,16 @@ fresh source checkout without installing the project:
 python examples/calibrate.py --help
 ```
 
+That launcher covers both calibration tools, which do unrelated jobs:
+`bus` sets up servos on the wire (IDs, EEPROM angle limits, speed), while
+`rom` drives each joint into its hard stops to measure travel and writes
+the arm's URDF-frame calibration.
+
+```bash
+python examples/calibrate.py bus --scan-range 1-6
+python examples/calibrate.py rom --arm-id <name>
+```
+
 The script automatically adds the local `src/` directory to `PYTHONPATH` when
 needed, so the command above works as long as it's run from the repository
 root. Alternatively, install the package (for example with `pip install .`) and
@@ -85,7 +95,7 @@ Launch the interactive text UI if you prefer guided prompts instead of CLI
 flags:
 
 ```bash
-python examples/calibrate.py --ui
+python examples/calibrate.py bus --ui
 ```
 
 Prefer a full dashboard? Start the Viser-based interface:

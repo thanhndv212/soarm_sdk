@@ -199,6 +199,7 @@ def seed_from_travel(
     urdf_limits: Sequence[Tuple[float, float]],
     tick_ranges: Sequence[Tuple[int, int]],
     *,
+    direction_signs: Optional[Sequence[int]] = None,
     arm_id: str = "unknown",
     source: str = "seeded from travel range + URDF limits",
 ) -> RobotCalibration:
@@ -209,23 +210,40 @@ def seed_from_travel(
     URDF's limits are approximate — and half that disagreement is kept per
     joint as ``seed_residual_rad``.
 
-    The direction sign is assumed +1 throughout; see the module docstring
-    for why a travel range cannot determine it. The returned calibration is
-    ``validated=False``.
+    *direction_signs* defaults to +1 for every joint, which is all a travel
+    range alone can offer — see the module docstring for why. Pass measured
+    signs once a physical check has established them: the sign is not a
+    cosmetic flag on top of the same zero, because it decides *which* end of
+    the travel is the URDF's lower limit, and so changes the zero the two
+    endpoints agree on. Flipping the field alone would leave the joint
+    mirrored about the wrong point.
+
+    The returned calibration is ``validated=False`` regardless; supplying
+    signs records what was measured, it does not certify it.
     """
     if not (len(names) == len(urdf_limits) == len(tick_ranges)):
         raise ValueError("names, urdf_limits and tick_ranges must be the same length")
+    signs = list(direction_signs) if direction_signs is not None else [1] * len(names)
+    if len(signs) != len(names):
+        raise ValueError("direction_signs must have one entry per joint")
+    if any(s not in (1, -1) for s in signs):
+        raise ValueError("every direction_sign must be +1 or -1")
 
     joints: List[JointCalibration] = []
-    for name, (u_lo, u_hi), (t_min, t_max) in zip(names, urdf_limits, tick_ranges):
+    for name, (u_lo, u_hi), (t_min, t_max), sign in zip(
+        names, urdf_limits, tick_ranges, signs
+    ):
         if u_hi <= u_lo:
             raise ValueError(f"{name}: URDF upper limit must exceed lower")
         if t_max <= t_min:
             raise ValueError(f"{name}: tick max must exceed min")
 
-        # Each endpoint pins the zero independently, assuming sign +1.
-        zero_from_lo = t_min - u_lo * TICKS_PER_RAD
-        zero_from_hi = t_max - u_hi * TICKS_PER_RAD
+        # Each endpoint pins the zero independently. Which URDF limit a tick
+        # endpoint corresponds to depends on the sign: at +1 the smallest tick
+        # is the lower limit, at -1 it is the upper one.
+        at_t_min, at_t_max = (u_lo, u_hi) if sign > 0 else (u_hi, u_lo)
+        zero_from_lo = t_min - sign * at_t_min * TICKS_PER_RAD
+        zero_from_hi = t_max - sign * at_t_max * TICKS_PER_RAD
         zero = (zero_from_lo + zero_from_hi) / 2.0
         residual = abs(zero_from_lo - zero_from_hi) / 2.0 * RADS_PER_TICK
 
@@ -234,7 +252,7 @@ def seed_from_travel(
             JointCalibration(
                 name=name,
                 zero_offset_ticks=zero,
-                direction_sign=1,
+                direction_sign=sign,
                 tick_min=int(t_min),
                 tick_max=int(t_max),
                 seed_residual_rad=residual,
@@ -249,7 +267,11 @@ def seed_from_travel(
         source=source,
         created=datetime.now(timezone.utc).isoformat(),
         notes={
-            "direction_signs": "ASSUMED +1 — not derivable from a travel range",
+            "direction_signs": (
+                "ASSUMED +1 — not derivable from a travel range"
+                if direction_signs is None
+                else "supplied by the caller from a physical check"
+            ),
             "next_step": "confirm signs and zero physically, then mark_validated()",
         },
     )

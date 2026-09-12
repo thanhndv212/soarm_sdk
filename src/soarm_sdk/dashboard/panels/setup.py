@@ -16,7 +16,12 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from ...calibration.rom_sweep import run_rom_sweep, simulate_rom_sweep
+from ...calibration.recentre import centring_offset, encode_ofs
+from ...calibration.rom_sweep import (
+    WRAP_SUSPECT_TICKS,
+    run_rom_sweep,
+    simulate_rom_sweep,
+)
 from ... import (
     STS_ACC,
     STS_LOCK,
@@ -387,19 +392,51 @@ def _build_homing(
             log_md.content = "**Error**: No results yet — run a sweep or manual recording first."
             return
         target_ref = int(target_ref_h.value)
+
+        # A sweep records the smallest and largest position it saw, so a joint
+        # whose travel crosses 4095/0 measures as the encoder's range instead
+        # of its own. Deriving an offset from that would put the joint's frame
+        # somewhere arbitrary, so those joints are reported and left alone —
+        # `soarm-calibrate-rom --recentre` measures them by accumulating
+        # displacement, which survives the wrap.
+        wrapped = [sid for sid, d in rom_results.items()
+                   if d["range_ticks"] >= WRAP_SUSPECT_TICKS]
+        writable = {sid: d for sid, d in rom_results.items() if sid not in wrapped}
+        if not writable:
+            log_md.content = (
+                f"**Nothing written.** J{', J'.join(str(s) for s in wrapped)} "
+                "measured nearly a full encoder turn — the travel wrapped. "
+                "Use `soarm-calibrate-rom --recentre` on these."
+            )
+            return
+
         try:
             with ctx.bus() as srv:
-                for sid, d in rom_results.items():
-                    off = target_ref - d["zero"]
-                    reg = (abs(off) | 0x0800) if off < 0 else abs(off)
-                    lmin = max(0, min(4095, d["pos_min"] + off))
-                    lmax = max(0, min(4095, d["pos_max"] + off))
+                for sid, d in writable.items():
+                    # The servo reports `raw - STS_OFS`, so the offset that
+                    # makes the swept midpoint read `target_ref` is
+                    # `zero - target_ref` — NOT the other way round. The sweep
+                    # runs in wheel mode, where the reported position is the
+                    # raw encoder, so `zero` is already in the raw frame the
+                    # register is subtracted from.
+                    off, lmin, lmax = centring_offset(
+                        d["zero"], d["pos_min"], d["pos_max"], target_ref
+                    )
                     write1(srv, sid, STS_LOCK, 0, "unlock")
-                    write2(srv, sid, STS_OFS_L, reg, f"offset J{sid}")
+                    write2(srv, sid, STS_OFS_L, encode_ofs(off), f"offset J{sid}")
                     write2(srv, sid, STS_MIN_ANGLE_LIMIT_L, lmin, f"min J{sid}")
                     write2(srv, sid, STS_MAX_ANGLE_LIMIT_L, lmax, f"max J{sid}")
                     write1(srv, sid, STS_LOCK, 1, "lock")
-            log_md.content = "**EEPROM updated.** Offsets and limits written to all joints."
+            done = ", ".join(f"J{sid}" for sid in writable)
+            msg = f"**EEPROM updated.** Offsets and limits written to {done}."
+            if wrapped:
+                skipped = ", ".join(f"J{sid}" for sid in wrapped)
+                msg += (
+                    f"\n\n**Skipped {skipped}** — travel wrapped past 4095/0, so the "
+                    "swept range is the encoder's, not the joint's. Run "
+                    "`soarm-calibrate-rom --recentre` on these."
+                )
+            log_md.content = msg
         except Exception as exc:
             log_md.content = f"**Apply error**: {exc}"
 

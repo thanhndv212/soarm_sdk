@@ -419,7 +419,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return launch_ui()
 
     if args.list_ports:
+        # A query, not a modifier: print and stop. Falling through ran a
+        # full calibration afterwards, which opened --device (default
+        # /dev/ttyUSB0) and raised SerialException on any machine that
+        # simply wanted to know which ports exist -- and printed the port
+        # list twice on the way, since run_calibration prints it again for
+        # callers that pass the flag in a Namespace.
         print_ports()
+        return 0
 
     try:
         return run_calibration(args)

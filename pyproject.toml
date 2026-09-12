@@ -47,6 +47,7 @@ soarm-calibrate = "soarm_sdk.cli.calibrate:main"
 soarm-dashboard = "soarm_sdk.cli.dashboard:main"
 soarm-dashboard-setup = "soarm_sdk.cli.dashboard:main_setup"
 soarm-seed-calibration = "soarm_sdk.calibration.seed:main"
+soarm-calibrate-rom = "soarm_sdk.calibration.sweep_cli:main"
 
 [project.urls]
 Homepage = "https://github.com/thanhndv212/soarm_sdk"

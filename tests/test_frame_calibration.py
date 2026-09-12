@@ -226,3 +226,48 @@ def test_mark_validated_records_how(seeded: RobotCalibration) -> None:
     assert seeded.validated is True
     assert "tape-measure" in seeded.notes["validated_by"]
     assert "validated_at" in seeded.notes
+
+
+def test_negative_sign_maps_the_other_endpoint_to_the_lower_limit():
+    """A flipped joint's zero is not the +1 zero with a sign stuck on it.
+
+    The sign decides which end of the measured travel is the URDF's lower
+    limit, so it changes the zero the two endpoints agree on. Getting this
+    wrong mirrors the joint about the wrong point — a plausible-looking
+    calibration that is wrong everywhere except by coincidence.
+    """
+    from soarm_sdk.calibration.frame import seed_from_travel
+
+    limits, ticks = [(-1.0, 1.0)], [(1000, 3000)]
+    pos = seed_from_travel(["j"], limits, ticks).joints[0]
+    neg = seed_from_travel(["j"], limits, ticks, direction_signs=[-1]).joints[0]
+
+    assert pos.direction_sign == 1 and neg.direction_sign == -1
+    # Symmetric limits and travel put both zeros at the travel midpoint here,
+    # but the endpoints they map to are swapped.
+    assert pos.to_rad(1000) == pytest.approx(-neg.to_rad(1000), abs=1e-9)
+
+
+def test_negative_sign_zero_differs_when_limits_are_asymmetric():
+    from soarm_sdk.calibration.frame import seed_from_travel
+
+    # wrist_roll's real numbers from the arm: asymmetric URDF limits.
+    limits, ticks = [(-2.74385, 2.84121)], [(102, 3993)]
+    pos = seed_from_travel(["wrist_roll"], limits, ticks).joints[0]
+    neg = seed_from_travel(
+        ["wrist_roll"], limits, ticks, direction_signs=[-1]
+    ).joints[0]
+
+    assert pos.zero_offset_ticks != pytest.approx(neg.zero_offset_ticks)
+    # Each end of the travel must still land on a URDF limit, swapped over.
+    assert neg.to_rad(3993) == pytest.approx(-2.74385, abs=0.2)
+    assert neg.to_rad(102) == pytest.approx(2.84121, abs=0.2)
+
+
+def test_direction_signs_are_validated():
+    from soarm_sdk.calibration.frame import seed_from_travel
+
+    with pytest.raises(ValueError, match="one entry per joint"):
+        seed_from_travel(["a"], [(-1.0, 1.0)], [(0, 100)], direction_signs=[1, 1])
+    with pytest.raises(ValueError, match=r"\+1 or -1"):
+        seed_from_travel(["a"], [(-1.0, 1.0)], [(0, 100)], direction_signs=[0])
