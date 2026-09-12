@@ -21,7 +21,16 @@ from typing import Any, Callable, ContextManager, Dict, List, Optional
 from ..bus.discovery import write1
 from ..protocol.registers import STS_LOCK, STS_MODE, STS_TORQUE_ENABLE, COMM_SUCCESS
 
-__all__ = ["run_rom_sweep", "simulate_rom_sweep"]
+__all__ = ["run_rom_sweep", "simulate_rom_sweep", "WRAP_SUSPECT_TICKS"]
+
+#: A measured range at or above this is very likely the encoder's range
+#: rather than the joint's. These functions track the smallest and largest
+#: *reported* position, and the report wraps at 4095/0 — so travel that
+#: crosses the boundary comes back as roughly 0..4095 whatever the joint
+#: actually does. There is no way to tell from a min and a max alone;
+#: :func:`soarm_sdk.calibration.recentre.measure_travel_range` accumulates
+#: displacement instead and is not fooled.
+WRAP_SUSPECT_TICKS = 3900
 
 _STALL_POLL_S = 0.08
 
