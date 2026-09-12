@@ -23,6 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`soarm-calibrate --list-ports` ran a calibration afterwards.** The flag
+  is a query, but `main()` printed the ports and then fell through into
+  `run_calibration()`, which opens `--device` — default `/dev/ttyUSB0` —
+  and raised `SerialException` on any machine that only wanted to know
+  which ports exist. The list also printed twice, since `run_calibration`
+  prints it again for callers that pass the flag in a `Namespace`. It now
+  prints once and returns 0. Covered by `tests/test_calibrate_cli.py`,
+  which also pins that the early return is scoped to the flag and that a
+  bad configuration still exits 2 with a message rather than a traceback.
 - **The enforced joint limits were in the wrong frame for two joints, and
   would have silently truncated real trajectories.**
   `configs/soarm100.yaml` declared `shoulder_lift` offset by −π/2 and
