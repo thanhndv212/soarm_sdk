@@ -142,6 +142,26 @@ class ServoRobot(Robot):
         """Raw :class:`ServoHardwareInterface` (after ``connect()``)."""
         return self._hw
 
+    def set_torque(self, enabled: bool) -> None:
+        """Enable or disable torque on every joint. Blocks until applied.
+
+        Servo-specific, so it is not on :class:`~soarm_sdk.robot.base.Robot`:
+        a simulated arm has no torque to switch. Disabling makes the joints
+        back-driveable, which is how a calibration's direction signs get
+        checked by hand and how a servo that has tripped its overload
+        protection against a stop is released.
+        """
+        self._assert_hw()
+        self._hw.set_torque(enabled)
+
+    def disable_torque(self) -> None:
+        """Go limp. Support the arm first — gravity-loaded joints will drop."""
+        self.set_torque(False)
+
+    def enable_torque(self) -> None:
+        """Hold station at the current measured pose."""
+        self.set_torque(True)
+
     def state_age(self) -> float:
         """Seconds since last successful servo read."""
         if self._hw is None:
