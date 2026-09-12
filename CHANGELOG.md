@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **One launcher for the calibration CLIs.** `examples/` carried
+  `calibrate.py` and `calibrate_arm.py`, two near-identical `sys.path`
+  shims whose names gave no hint that they start unrelated tools — one
+  configures servos on the wire (IDs, EEPROM angle limits, speed), the
+  other drives the joints into their hard stops and writes the arm's
+  URDF-frame calibration. They are now named modes of a single
+  `examples/calibrate.py`: `bus` and `rom`. The mode is spliced into
+  `sys.argv[0]` before dispatch, so each tool's own `--help` advertises a
+  command line that works. Seeding offline stays out of it:
+  `soarm_sdk.calibration.seed.main()` takes no argv, so it does not
+  forward cleanly — `soarm-seed-calibration` remains its entry point.
+
 ### Fixed
 
 - **The enforced joint limits were in the wrong frame for two joints, and
@@ -89,7 +103,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the raw sweep under `notes["sweep"]`, flags any direction that timed out
   instead of stalling, and — like the seeding CLI — writes
   `validated: false`, because a travel range still cannot settle the
-  direction signs. `examples/calibrate_arm.py` runs it from a checkout.
+  direction signs. `examples/calibrate.py rom` runs it from a checkout.
 - **`seed_from_travel(direction_signs=...)`** — seed a joint whose direction
   has actually been measured. The sign is not a cosmetic flag over the same
   zero: it decides which end of the measured travel is the URDF's *lower*
