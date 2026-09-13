@@ -33,6 +33,7 @@ from __future__ import annotations
 import logging
 import math
 import shutil
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -62,6 +63,11 @@ URDF_LIMITS: Dict[str, tuple] = {
 #: badly seeded zero, narrow enough that a slip cannot silently rewrite the
 #: calibration into nonsense.
 NUDGE_LIMIT_DEG = 45.0
+
+#: How long to watch before pinning a zero, and how much movement over that
+#: window disqualifies the reading.
+SETTLE_S = 0.4
+SETTLE_TOLERANCE_DEG = 0.5
 
 #: Overshoot below this is not reported. A joint resting exactly on a limit
 #: crosses it by microdegrees as the servo jitters, and "OUTSIDE by 0.0°"
@@ -280,6 +286,47 @@ def _format_drift(ctx: Any) -> str:
     )
 
 
+def _format_pinned(handles: Dict[str, Any], rows: List[dict]) -> str:
+    """How far the arm has drifted from the pose its zeros were pinned to.
+
+    A re-zero is exact at the instant it happens: the ticks are made to
+    mean the pose, so the mirror renders the pose. If the arm then settles
+    — and a folded arm held flat by hand settles as soon as the hand goes
+    to the mouse — the mirror follows it away, and what the operator sees
+    is a mirror that does not show the pose they just pinned. That looks
+    exactly like a re-zero that did not take.
+
+    So say which it is. The arm moving after the fact is a fact about the
+    arm; it is reported here, against the pose, instead of being left to
+    look like a bug.
+    """
+    pinned = handles.get("pinned")
+    if not pinned:
+        return ""
+    pose = pinned["pose"]
+    by_tick = {r["name"]: r["ticks"] for r in rows}
+    moved = []
+    for name in pose.covers:
+        then, now = pinned["ticks"].get(name), by_tick.get(name)
+        if then is None or now is None:
+            continue
+        d = (now - then) * 360.0 / 4096.0
+        if abs(d) > SETTLE_TOLERANCE_DEG:
+            moved.append(f"{name} {d:+.2f}°")
+    if not moved:
+        return (
+            f"✅ Pinned to **{pose.key}**, and the arm is still there — "
+            "the mirror is showing that pose."
+        )
+    return (
+        f"ℹ️ Pinned to **{pose.key}**, but the arm has moved since: "
+        f"{', '.join(moved)}. The mirror is following the arm, so it no "
+        "longer shows the pose — that is the arm settling, **not** a failed "
+        "re-zero. If it settled because you let go, put it back and re-zero "
+        "again so the zero is pinned where the arm rests."
+    )
+
+
 def _on_tick(ctx: Any, handles: Dict[str, Any]) -> None:
     if not handles:
         return
@@ -293,6 +340,7 @@ def _on_tick(ctx: Any, handles: Dict[str, Any]) -> None:
     handles["rows"] = rows
     handles["symmetry_md"].content = _format_symmetry(getattr(ctx, "calibration", None))
     handles["drift_md"].content = _format_drift(ctx)
+    handles["pinned_md"].content = _format_pinned(handles, rows)
     handles["table_md"].content = _format_table(rows, getattr(ctx, "calibration", None))
     handles["members_md"].content = _format_members(ctx, rows)
 
@@ -323,6 +371,7 @@ def _build(server: Any, ctx: Any, handles: Dict[str, Any]) -> None:
 
     with server.gui.add_folder("Live"):
         handles["drift_md"] = server.gui.add_markdown("")
+        handles["pinned_md"] = server.gui.add_markdown("")
         handles["outside_md"] = server.gui.add_markdown("")
         handles["table_md"] = server.gui.add_markdown("*Waiting…*")
 
@@ -416,6 +465,35 @@ def _do_rezero(ctx: Any, handles: Dict[str, Any], pose: ReferencePose) -> None:
         # a value nobody measured.
         return _say(handles, "no live reading from every joint — connect first")
 
+    # An arm held in position by hand is not in that position; it is being
+    # put there, and it leaves as soon as you let go to press the button.
+    # Pin a zero to that and the zero carries the holding force. Sample
+    # twice and refuse while anything is still moving — the same check
+    # read_pose.capture makes before handing a pose to the planner.
+    time.sleep(SETTLE_S)
+    with ctx.lock:
+        again = dict(ctx.state.positions)
+    covered_ids = [
+        sid
+        for sid, name in zip(ctx.joint_ids, SOARM100_JOINT_NAMES)
+        if name in pose.covers
+    ]
+    drifting = []
+    for sid, name in zip(ctx.joint_ids, SOARM100_JOINT_NAMES):
+        if sid not in covered_ids:
+            continue
+        b = again.get(sid)
+        if b is None:
+            continue
+        moved = abs(b - positions[sid]) * 360.0 / 4096.0
+        if moved > SETTLE_TOLERANCE_DEG:
+            drifting.append(f"{name} {moved:.2f}°")
+    if drifting:
+        _say(handles, f"arm still moving ({', '.join(drifting)} in {SETTLE_S:.1f}s)")
+        _say(handles, "let it settle where it rests, then re-zero — a zero "
+                      "pinned while you hold the arm leaves with your hand")
+        return
+
     try:
         ref = pose.q_for(tuple(cal.names))
         new = rezero_from_pose(
@@ -445,6 +523,13 @@ def _do_rezero(ctx: Any, handles: Dict[str, Any], pose: ReferencePose) -> None:
     }
     ctx.calibration = new
     handles["nudge_base"] = new
+    # So that an arm which settles afterwards reads as an arm that settled,
+    # not as a re-zero that failed to take. Without this the mirror simply
+    # stops matching the pose and there is nothing to say why.
+    handles["pinned"] = {
+        "pose": pose,
+        "ticks": dict(zip(SOARM100_JOINT_NAMES, ticks)),
+    }
     for name, slider in handles.get("nudges", {}).items():
         slider.value = 0.0
     # How far each joint's reported angle moved, which is what the operator

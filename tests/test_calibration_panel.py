@@ -411,3 +411,50 @@ def test_a_pose_past_the_urdf_limits_warns_before_you_hold_it():
 
     elbow = FOLDED_FLAT.as_cfg()["elbow_flex"]
     assert elbow > LIM["elbow_flex"][1], "pose should exceed the URDF ceiling"
+
+
+# -- an arm that settles after the re-zero ------------------------------
+
+
+def _rows_at(ticks: dict):
+    return [{"name": n, "ticks": t} for n, t in ticks.items()]
+
+
+def test_no_movement_since_the_pin_reads_as_showing_the_pose():
+    from soarm_sdk.calibration.reference import FOLDED_FLAT
+    from soarm_sdk.dashboard.panels.calibration import _format_pinned
+
+    held = {"shoulder_lift": 1171, "elbow_flex": 3435}
+    handles = {"pinned": {"pose": FOLDED_FLAT, "ticks": held}}
+    out = _format_pinned(handles, _rows_at(held))
+    assert "still there" in out
+    assert "moved" not in out
+
+
+def test_an_arm_that_settles_is_named_as_settling_not_as_a_failed_rezero():
+    """The exact confusion: pin at 3435, arm sags to 3371, mirror follows.
+
+    The mirror stops showing the pinned pose and looks broken. It is not —
+    it is tracking an arm that moved 5.6 deg after the hand came off.
+    """
+    from soarm_sdk.calibration.reference import FOLDED_FLAT
+    from soarm_sdk.dashboard.panels.calibration import _format_pinned
+
+    handles = {
+        "pinned": {
+            "pose": FOLDED_FLAT,
+            "ticks": {"shoulder_lift": 1171, "elbow_flex": 3435},
+        }
+    }
+    out = _format_pinned(
+        handles, _rows_at({"shoulder_lift": 1171, "elbow_flex": 3371})
+    )
+    assert "elbow_flex -5.6" in out
+    assert "not** a failed" in out
+    assert "shoulder_lift" not in out  # it did not move; do not cry wolf
+
+
+def test_nothing_is_said_before_any_rezero():
+    from soarm_sdk.dashboard.panels.calibration import _format_pinned
+
+    assert _format_pinned({}, _rows_at({"elbow_flex": 3371})) == ""
