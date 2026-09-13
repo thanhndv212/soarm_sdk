@@ -235,7 +235,7 @@ polling interval, and connection status.
 
 #### 3-D FK Visualisation
 
-When a URDF is available (default: `SO-ARM100/Simulation/SO100/so100.urdf`)
+When a URDF is available (default: `SO-ARM100/Simulation/SO101/so101_new_calib.urdf`)
 all link meshes are loaded into the Viser 3-D scene and updated at ~3 Hz from
 the live encoder positions. FK is computed with `yourdfpy` + `trimesh`.
 

@@ -7,6 +7,118 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The background bus thread now reads the whole telemetry block.** The
+  sync-read group widened from 4 bytes (position + speed) to the full
+  read-only SRAM span, addresses 56-70: position, speed, load, voltage,
+  temperature, status flags, moving, and current — still **one transaction
+  per tick**. On the wire that is 1.40 ms against 0.74 ms for 6 servos at
+  1 Mbaud, so load and current now cost 0.66 ms/tick instead of the twelve
+  per-servo round trips they used to need. Bus bandwidth was never the
+  constraint here; per-transaction USB turnaround is.
+- `ServoHealth` (`soarm_sdk.robot.types`, re-exported from `soarm_sdk`) and
+  `ServoHardwareInterface.get_servo_health()` — the servo-frame diagnostic
+  half of that block (load %, current mA, voltage V, temperature °C, status
+  flags, moving), all sharing the single timestamp of the read they came
+  from. `JointState` keeps the joint-frame control quantities.
+- Named protocol constants for the block and its sign-magnitude decode:
+  `STS_TELEMETRY_START`, `STS_TELEMETRY_LENGTH`, `STS_{POSITION,SPEED,LOAD,
+  CURRENT}_SIGN_BIT`, and the LSB scale factors.
+- **A telemetry tap on the bus thread.** `ServoHardwareInterface.subscribe()`
+  returns a `TelemetryStream` — a bounded, drop-oldest queue receiving one
+  `ServoSample` per successful bus tick. The bus thread never calls consumer
+  code: it appends and returns. That thread also issues servo writes, so a
+  slow consumer there would delay commands to the arm. With no subscribers
+  nothing is built, so subscribing is the switch that turns telemetry on.
+- **`ServoSample` carries commanded and measured state together**, under one
+  timestamp taken next to the wire, so tracking error is a subtraction
+  (`sample.tracking_error_rad()`) rather than a join across two logs with
+  different clocks. `seq` counts bus ticks rather than published samples: a
+  gap tells a consumer a read failed, distinguishing "the arm did not move"
+  from "we missed the sample".
+- **Sinks and a recorder thread** (`soarm_sdk.robot.telemetry_sinks`):
+  `TelemetryRecorder` drains a stream on its own thread and fans out to
+  `JsonlSink` (one JSON object per line, buffered — the same file-as-channel
+  shape `soarm_tamp` uses for `live.jsonl`) and `RerunSink` (per-joint scalar
+  series). A sink that raises is logged and dropped rather than retried, so
+  one broken sink cannot cost the others their data. `rerun-sdk` is not a
+  dependency — it is the new `[telemetry]` extra, imported at construction.
+
+- **The dashboard can consume the telemetry stream instead of polling**
+  (`soarm-dashboard --stream`, off by default while it beds in). One
+  `ServoHardwareInterface` holds the port open and the dashboard drains its
+  samples, which removes the two costs the legacy loop paid every cycle:
+  reopening the serial port each iteration, and twelve per-servo round trips
+  for temperature and current every fifth poll — measured at 7.36 ms against a
+  2.09 ms full-block sync-read carrying the same fields. Health data now
+  arrives every tick rather than every fifth poll. The dashboard connects with
+  `torque_on_start=False`: opening a browser tab must never energise the arm.
+- **`ServoHardwareInterface.lend_bus()`** — pause the bus thread and hand the
+  caller the live servo handle. The port is exclusive, so the dashboard's 19
+  `ctx.bus()` call sites (EEPROM writes, servo ID changes, one-off diagnostics)
+  cannot open their own connection while the interface holds it; they borrow
+  this one and are otherwise unchanged. Measured hand-over on hardware: 0.01 ms,
+  because the lock is free during the inter-tick sleep.
+- **`soarm_sdk.diagnostics`** — `measure_backlash()` drives a joint to one
+  target from below and from above and reports the hysteresis gap against
+  within-direction scatter, so a gap smaller than the repeat noise is reported
+  as insignificant rather than as a result. `measure_droop()` sweeps a joint and
+  records settled position, load and current together from the same samples.
+  Its steady-state error is documented as a **lower bound** on true deflection:
+  compliance downstream of the encoder is invisible to the servo, and closing
+  that gap needs an external reference.
+
+- **The 3-D view rendered raw ticks against a nominal zero.** `update_fk` mapped
+  every joint with `ticks_to_radians(ticks)` — tick 2048 is zero, no direction
+  signs — ignoring the arm's saved calibration entirely. On the arm here that
+  put the main joints 16-30 degrees out, the gripper 74 degrees out, and turned
+  `wrist_roll` the wrong way, which reads as the model and the robot
+  disagreeing when only the view was uncalibrated. It now loads
+  `~/.soarm_sdk/calibration.json` (override with `--calibration`) and maps each
+  joint through its own measured zero and sign; with no calibration present it
+  still runs but says so instead of silently rendering wrong.
+- **Defaults moved from the SO-100 to the SO-101 revision** — the arm this
+  workspace actually has. The dashboard URDF is now
+  `SO-ARM100/Simulation/SO101/so101_new_calib.urdf`, and `load_robot_config()`
+  defaults to `so101` rather than `soarm100` (`soarm100` stays loadable by name;
+  the two carry identical limits today and differ only in name and
+  description). This is not cosmetic: the revisions do not share a zero
+  convention — SO100 puts `shoulder_lift` at `[0, 3.5]` and `elbow_flex` at
+  `[-3.1416, 0]` while SO101 centres both at `[-1.745, 1.745]` and
+  `[-1.69, 1.69]`. The saved calibration is SO101-framed (confirmed from its
+  recorded `span_ratio`), so feeding its radians into the SO100 model was wrong
+  by more than a radian on those joints.
+
+- **`rezero_from_pose()`** — pin joint zeros to a configuration you can verify
+  physically, instead of inferring them from travel endpoints.
+  `seed_from_travel` assumes, in its own words, that measured travel and the
+  URDF's limits "describe the same mechanical hard stops". On this arm they do
+  not: `span_ratio` runs 0.96-1.34, because the URDF's limits are conservative
+  software limits while the real travel is wider. Stretching one onto the other
+  misplaces every zero by a share of the disagreement — which is the standing
+  "URDF/travel span mismatch" that also blocks `soarm_tamp`'s `execute.py`.
+  The new path takes the zero from a held reference pose and carries measured
+  travel through untouched, so `reachable_rad` still reports the true hard
+  stops and `span_ratio` survives as the record that they disagree.
+
+  Confirmed on the arm (2026-09-13): re-zeroing against a level-verified pose
+  — upper arm vertical, forearm and gripper axis horizontal, no yaw — moved
+  `shoulder_lift` by only 3.07 degrees, while a clean `seed_from_travel`
+  re-seed wanted to move it 15.5 degrees the other way. The hand-levelled zero
+  had been right and the seeding method wrong. With that calibration and the
+  SO101 model, the 3-D mirror tracks the physical arm.
+
+- **A span mismatch now only impeaches the zeros it actually informed.**
+  `JointCalibration` gained `zero_source`, and `suspect` is no longer a bare
+  restatement of `span_ratio`: it means "measured travel disagrees with the
+  URDF *and* this joint's zero was inferred from those same limits". A zero
+  pinned by `rezero_from_pose` never touched them, so the same mismatch says
+  only that the URDF is conservative about travel — reported through the new
+  `span_mismatch` / `span_mismatch_joints`, not through `suspect`. Files
+  written before this field default to `unknown`, which is treated as
+  limits-derived, so nothing silently becomes trusted.
+
 ### Changed
 
 - **One launcher for the calibration CLIs.** `examples/` carried
@@ -22,6 +134,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forward cleanly — `soarm-seed-calibration` remains its entry point.
 
 ### Fixed
+
+- **`ReadLoad` and `ReadCurrent` truncated their registers.** Both issued
+  1-byte reads against 2-byte sign-magnitude registers — `PRESENT_LOAD`
+  (60-61, magnitude in bits 0-9 and direction in bit 10) and
+  `PRESENT_CURRENT` (69-70, 6.5 mA per LSB, signed at bit 15). Every value
+  above 255 LSB wrapped and every direction was lost: a full-scale 100.0%
+  load read as 23.2%, and 1950 mA read as 286 mA. Both now read two bytes
+  and decode the sign bit their register actually uses. These are the two
+  registers that matter most for diagnosing backlash and load-dependent
+  elasticity, so nothing that consumed them was trustworthy.
+
+  Verified on a real SO-101 (2026-09-13): driving `shoulder_pan` — the one
+  gravity-neutral joint, so its load is unbiased — through +/-40 ticks swung
+  load symmetrically to -6.4%/+6.4%, setting bit 10 while bits 11-15 stayed
+  clear throughout. A sign at bit 15 would have decoded those same words as
+  >100% load, which never appeared. `PRESENT_CURRENT` was never observed
+  negative, so its bit-15 sign is unexercised; the decode is safe either way,
+  since 6.5 mA per LSB puts bit 15 at 213 A and no real reading can reach it.
+- **`JointState.efforts` was always zeros.** `_cached_currents_mA` was
+  allocated and returned but never written, because the sync read only
+  covered position and speed — while both the class docstring and
+  `get_robot_joint_state` documented efforts as motor current in mA. It is
+  now populated from the widened read. No package in `soarm-ws` consumed
+  `efforts`, so nothing downstream was silently wrong.
+- **`start()` could lurch the arm.** `torque_on_start` defaults to `True`, and
+  `start()` enabled torque with a raw register write while the position cache
+  still held its `TICK_ZERO` seed — so the servos chased whatever stale goal
+  sat in their SRAM from a previous session. `_apply_pending_torque` had always
+  parked goals at the measured pose first, for exactly this reason; `start()`
+  now does the same, via the shared `_park_goals_at_measured()`. It also takes
+  a priming read before anything can act on the cache (up to 3 attempts), and
+  **refuses to enable torque** if no state could be read, rather than parking
+  against the placeholder zero pose. This matters because the arm is normally
+  left at an arbitrary pose between sessions, never at its kinematic zero.
+- **`GroupSyncRead.isAvailable` did not check the requested field.** It
+  compared the response length against `data_length + 1` regardless of where
+  in the block the field sat, so it answered correctly for a field at the
+  front and wrongly for every field behind it — letting `getData` walk off
+  the end of a truncated response with an `IndexError`. It now checks that
+  the field's own byte range was actually received. Latent until now: the
+  only sync-read group was 4 bytes wide, and the parser returns whole blocks
+  or nothing.
 
 - **`soarm-calibrate --list-ports` ran a calibration afterwards.** The flag
   is a query, but `main()` printed the ports and then fell through into

@@ -35,15 +35,20 @@ _CONFIGS_DIR = Path(__file__).parent.parent / "configs"
 
 
 def load_robot_config(
-    name_or_path: Union[str, Path] = "soarm100",
+    name_or_path: Union[str, Path] = "so101",
 ) -> Dict[str, Any]:
     """Load a robot config by short name or file path.
 
     Parameters
     ----------
     name_or_path
-        Either a short name (e.g. ``"soarm100"``) resolved to
+        Either a short name (e.g. ``"so101"``) resolved to
         ``configs/<name>.yaml``, or an explicit path.
+
+        Defaults to ``so101``: the SO-101 is the revision physically
+        present in this workspace. ``soarm100`` remains available and
+        currently carries identical limits — the two differ only in name
+        and description.
     """
     p = Path(name_or_path)
     if not p.suffix:

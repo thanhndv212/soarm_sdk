@@ -15,6 +15,10 @@ from .registers import (
     STS_MODE,
     STS_MOVING,
     STS_OFS_L,
+    STS_CURRENT_MA_PER_LSB,
+    STS_CURRENT_SIGN_BIT,
+    STS_LOAD_PERCENT_PER_LSB,
+    STS_LOAD_SIGN_BIT,
     STS_PRESENT_CURRENT_L,
     STS_PRESENT_LOAD_L,
     STS_PRESENT_POSITION_L,
@@ -22,6 +26,7 @@ from .registers import (
     STS_PRESENT_TEMPERATURE,
     STS_PRESENT_VOLTAGE,
     STS_STATUS,
+    STS_VOLTAGE_V_PER_LSB,
 )
 
 
@@ -143,9 +148,16 @@ class sts(ProtocolPacketHandler):  # noqa: N801 - legacy name
         return self.port_handler.getBaudRate()
 
     def ReadLoad(self, servo_id: int) -> Tuple[float, int, int]:  # noqa: N802
-        packet = self.read1ByteTxRx(servo_id, STS_PRESENT_LOAD_L)
+        """Return present load as signed percent of PWM duty (-100.0..100.0).
+
+        PRESENT_LOAD is a 2-byte sign-magnitude register (60-61): magnitude
+        0..1000 in bits 0-9, direction in bit 10. Reading one byte truncates
+        to the low 8 bits and drops the sign.
+        """
+        packet = self.read2ByteTxRx(servo_id, STS_PRESENT_LOAD_L)
         if packet.result == COMM_SUCCESS and packet.data:
-            value = packet.data[0] * 0.1
+            raw = self.sts_tohost(packet.data[0], STS_LOAD_SIGN_BIT)
+            value = raw * STS_LOAD_PERCENT_PER_LSB
         else:
             value = 0.0
         return value, packet.result, packet.error
@@ -155,7 +167,7 @@ class sts(ProtocolPacketHandler):  # noqa: N801 - legacy name
     ) -> Tuple[float, int, int]:  # noqa: N802
         packet = self.read1ByteTxRx(servo_id, STS_PRESENT_VOLTAGE)
         if packet.result == COMM_SUCCESS and packet.data:
-            value = packet.data[0] * 0.1
+            value = packet.data[0] * STS_VOLTAGE_V_PER_LSB
         else:
             value = 0.0
         return value, packet.result, packet.error
@@ -163,9 +175,15 @@ class sts(ProtocolPacketHandler):  # noqa: N801 - legacy name
     def ReadCurrent(
         self, servo_id: int
     ) -> Tuple[float, int, int]:  # noqa: N802
-        packet = self.read1ByteTxRx(servo_id, STS_PRESENT_CURRENT_L)
+        """Return present current in mA, signed by direction of torque.
+
+        PRESENT_CURRENT is a 2-byte sign-magnitude register (69-70) in units
+        of 6.5 mA. Reading one byte truncates to the low 8 bits.
+        """
+        packet = self.read2ByteTxRx(servo_id, STS_PRESENT_CURRENT_L)
         if packet.result == COMM_SUCCESS and packet.data:
-            value = packet.data[0] * 6.5
+            raw = self.sts_tohost(packet.data[0], STS_CURRENT_SIGN_BIT)
+            value = raw * STS_CURRENT_MA_PER_LSB
         else:
             value = 0.0
         return value, packet.result, packet.error

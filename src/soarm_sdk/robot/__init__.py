@@ -18,7 +18,14 @@ soarm_sdk at all — see :mod:`soarm_sdk.robot.interfaces`.
 
 from __future__ import annotations
 
-from .types import Pose, JointState
+from .telemetry import ServoSample, TelemetryStream
+from .telemetry_sinks import (
+    JsonlSink,
+    RerunSink,
+    TelemetryRecorder,
+    TelemetrySink,
+)
+from .types import Pose, JointState, ServoHealth
 from .interfaces import RobotInterface
 from .config import ConfigError, validate_robot_config
 from .base import Robot, load_robot_config
@@ -30,6 +37,13 @@ from .lerobot import LeRobotRobot
 __all__ = [
     "Pose",
     "JointState",
+    "ServoHealth",
+    "ServoSample",
+    "TelemetryStream",
+    "TelemetrySink",
+    "TelemetryRecorder",
+    "JsonlSink",
+    "RerunSink",
     "RobotInterface",
     "ConfigError",
     "validate_robot_config",

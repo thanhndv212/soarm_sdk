@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..calibration.frame import RobotCalibration
 from ..conversions import ticks_to_radians
 from ..kinematics.urdf_fk import URDF_AVAILABLE, link_transforms, load_urdf
 
@@ -19,7 +20,12 @@ try:
 except ImportError:  # pragma: no cover -- guarded by URDF_AVAILABLE below
     trimesh = None  # type: ignore[assignment]
 
+#: Where soarm-calibrate-rom / soarm-seed-calibration write by default.
+DEFAULT_CALIBRATION_PATH = Path.home() / ".soarm_sdk" / "calibration.json"
+
 __all__ = [
+    "DEFAULT_CALIBRATION_PATH",
+    "load_calibration",
     "SOARM100_IDS",
     "SOARM100_JOINT_NAMES",
     "URDF_AVAILABLE",
@@ -85,22 +91,69 @@ def load_urdf_meshes(
     return urdf, mesh_handles
 
 
+def load_calibration(
+    path: Optional[Path] = None,
+) -> Optional[RobotCalibration]:
+    """Load the arm's tick-to-URDF-frame calibration, or ``None`` if absent.
+
+    Without this the 3-D view has to assume every joint reads zero radians at
+    tick 2048 and increases in the servo's own direction. Neither holds on a
+    real arm: on the arm this was written against, that assumption puts the
+    main joints 16-30 degrees out, the gripper 74 degrees out, and turns
+    ``wrist_roll`` the wrong way. The mismatch is in the *view*, not the
+    robot — the ticks were right all along.
+    """
+    p = Path(path) if path is not None else DEFAULT_CALIBRATION_PATH
+    if not p.exists():
+        print(
+            f"[soarm_sdk.dashboard] no calibration at {p} — the 3-D view will "
+            "assume tick 2048 is zero for every joint and will not match the "
+            "real arm. Run soarm-calibrate-rom or soarm-seed-calibration."
+        )
+        return None
+    try:
+        calib = RobotCalibration.load(p)
+    except Exception as exc:
+        print(f"[soarm_sdk.dashboard] could not read {p}: {exc}")
+        return None
+    if not calib.validated:
+        print(
+            f"[soarm_sdk.dashboard] calibration {p} is marked validated=false; "
+            "the 3-D view may still be mirrored on some joints."
+        )
+    return calib
+
+
 def update_fk(
     urdf: Any,
     positions: Dict[int, int],
     mesh_handles: Dict[str, Any],
     joint_ids: Optional[List[int]] = None,
     joint_names: Optional[List[str]] = None,
+    calibration: Optional[RobotCalibration] = None,
 ) -> None:
-    """Recompute FK from joint positions (ticks) and push transforms to Viser."""
+    """Recompute FK from joint positions (ticks) and push transforms to Viser.
+
+    With *calibration*, ticks are mapped through the arm's measured zero
+    offsets and direction signs; without it, through the nominal
+    tick-2048-is-zero assumption, which will not match a real arm.
+    """
+    ids = joint_ids if joint_ids is not None else SOARM100_IDS
+    names = joint_names if joint_names is not None else SOARM100_JOINT_NAMES
+
+    by_name = {}
+    if calibration is not None:
+        by_name = {j.name: j for j in calibration.joints}
+
     cfg: Dict[str, float] = {}
-    for sid, jname in zip(
-        joint_ids if joint_ids is not None else SOARM100_IDS,
-        joint_names if joint_names is not None else SOARM100_JOINT_NAMES,
-    ):
+    for sid, jname in zip(ids, names):
         ticks = positions.get(sid)
-        if ticks is not None:
-            cfg[jname] = ticks_to_radians(ticks)
+        if ticks is None:
+            continue
+        joint = by_name.get(jname)
+        cfg[jname] = (
+            joint.to_rad(ticks) if joint is not None else ticks_to_radians(ticks)
+        )
 
     if not cfg:
         return

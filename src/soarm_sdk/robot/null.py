@@ -33,7 +33,7 @@ class NullRobot(Robot):
     Parameters
     ----------
     config
-        Robot config dict. Defaults to ``soarm100.yaml``.
+        Robot config dict. Defaults to ``so101.yaml``.
     fk_fn
         Optional FK callable ``(q) -> (pos, quat)`` for :meth:`get_ee_pose`.
         Without one, :meth:`get_ee_pose` returns :meth:`Pose.identity`.

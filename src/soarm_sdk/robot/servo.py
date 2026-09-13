@@ -29,7 +29,7 @@ class ServoRobot(Robot):
     port
         Serial device path (e.g. ``/dev/tty.usbserial-XXXX``).
     config
-        Robot config dict. Defaults to ``soarm100.yaml``.
+        Robot config dict. Defaults to ``so101.yaml``.
     fk_fn
         Optional FK callable ``(q) -> (pos, quat)`` for EE pose queries.
     """

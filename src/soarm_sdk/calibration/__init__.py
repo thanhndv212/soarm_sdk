@@ -15,12 +15,19 @@ question: *what tick value means zero radians to the URDF?*
 
 from __future__ import annotations
 
-from .frame import JointCalibration, RobotCalibration, seed_from_travel, seed_from_lerobot
+from .frame import (
+    JointCalibration,
+    RobotCalibration,
+    rezero_from_pose,
+    seed_from_travel,
+    seed_from_lerobot,
+)
 from .rom_sweep import run_rom_sweep, simulate_rom_sweep
 
 __all__ = [
     "JointCalibration",
     "RobotCalibration",
+    "rezero_from_pose",
     "seed_from_travel",
     "seed_from_lerobot",
     "run_rom_sweep",

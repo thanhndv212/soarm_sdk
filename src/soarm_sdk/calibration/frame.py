@@ -43,7 +43,7 @@ planned trajectory until it is ``True``.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -53,6 +53,7 @@ from ..conversions import RADS_PER_TICK, TICKS_PER_RAD
 __all__ = [
     "JointCalibration",
     "RobotCalibration",
+    "rezero_from_pose",
     "seed_from_travel",
     "seed_from_lerobot",
 ]
@@ -82,6 +83,13 @@ class JointCalibration:
     seed_residual_rad: float = 0.0
     # measured travel / URDF travel. Should be ~1.0; see SPAN_RATIO_TOLERANCE.
     span_ratio: float = 1.0
+    #: Where this joint's zero came from. Decides what ``span_ratio`` implies:
+    #: a zero *derived from* the URDF's limits is only as good as they are, so
+    #: a span mismatch impeaches it. A zero pinned to a physically verified
+    #: pose does not depend on those limits at all, and the same mismatch then
+    #: says only that the URDF is conservative about travel.
+    #: One of ``travel_and_urdf_limits``, ``reference_pose``, ``unknown``.
+    zero_source: str = "unknown"
 
     def to_rad(self, ticks: float) -> float:
         return self.direction_sign * (ticks - self.zero_offset_ticks) * RADS_PER_TICK
@@ -90,9 +98,25 @@ class JointCalibration:
         return self.zero_offset_ticks + self.direction_sign * rad * TICKS_PER_RAD
 
     @property
-    def suspect(self) -> bool:
-        """True when the span ratio says the two sources disagree materially."""
+    def span_mismatch(self) -> bool:
+        """True when measured travel and the URDF's limits disagree materially.
+
+        A fact about the two sources, independent of how the zero was found.
+        """
         return abs(self.span_ratio - 1.0) > SPAN_RATIO_TOLERANCE
+
+    @property
+    def suspect(self) -> bool:
+        """True when the span mismatch actually impeaches this joint's zero.
+
+        Only when the zero was inferred from the URDF's limits. A zero pinned
+        to a verified pose is unaffected by them being wrong, so the same
+        mismatch is informational there rather than disqualifying — see
+        :func:`rezero_from_pose`. ``unknown`` provenance is treated as
+        limits-derived, since that is what every calibration written before
+        this field existed was.
+        """
+        return self.span_mismatch and self.zero_source != "reference_pose"
 
     @property
     def reachable_rad(self) -> Tuple[float, float]:
@@ -160,7 +184,18 @@ class RobotCalibration:
 
     @property
     def suspect_joints(self) -> List[str]:
+        """Joints whose zero is impeached by a travel/URDF span mismatch."""
         return [j.name for j in self.joints if j.suspect]
+
+    @property
+    def span_mismatch_joints(self) -> List[str]:
+        """Joints whose measured travel disagrees with the URDF, zero aside.
+
+        Worth reporting even when the zero is sound: it means the URDF's
+        limits are not the arm's real reach, so plan against
+        :meth:`reachable_limits` rather than the model's own numbers.
+        """
+        return [j.name for j in self.joints if j.span_mismatch]
 
     @property
     def worst_seed_residual_rad(self) -> float:
@@ -192,6 +227,64 @@ class RobotCalibration:
         self.validated = True
         self.notes["validated_by"] = how
         self.notes["validated_at"] = datetime.now(timezone.utc).isoformat()
+
+
+def rezero_from_pose(
+    calibration: "RobotCalibration",
+    ticks: Sequence[float],
+    reference_rad: Optional[Sequence[float]] = None,
+    *,
+    source: str = "re-zeroed from a physically held reference pose",
+) -> "RobotCalibration":
+    """Recompute zero offsets from ticks measured at a *known* configuration.
+
+    :func:`seed_from_travel` infers the zero by matching the ends of measured
+    travel to the URDF's joint limits, on the stated assumption that both
+    describe the same mechanical hard stops. When they do not — when the URDF
+    limits are conservative software limits and the real travel is wider — that
+    inference is stretched across the disagreement and every zero lands off by
+    a share of it. ``span_ratio`` is what measures the disagreement; anything
+    far from 1.0 means the seeded zero cannot be trusted.
+
+    This takes the other route: hold the arm at a configuration you can verify
+    physically (a level, a straight edge, a hard stop you trust), read the
+    ticks there, and pin the zeros to that. No dependence on the URDF's limits
+    at all.
+
+    *reference_rad* defaults to all zeros — for the SO-101 that is the upper
+    arm vertical and the forearm horizontal. Measured travel is carried over
+    unchanged, so :meth:`reachable_rad` still reports the real hard stops, and
+    ``span_ratio`` is preserved as the record that they disagree with the URDF.
+
+    The result is ``validated=False``: pinning the zero to a pose you believe
+    in is not the same as confirming it, and the direction signs are inherited
+    rather than re-measured.
+    """
+    n = len(calibration.joints)
+    if len(ticks) != n:
+        raise ValueError(f"expected {n} tick values, got {len(ticks)}")
+    ref = [0.0] * n if reference_rad is None else list(reference_rad)
+    if len(ref) != n:
+        raise ValueError(f"expected {n} reference angles, got {len(ref)}")
+
+    joints = [
+        replace(
+            j,
+            # to_rad(t) = sign * (t - zero) * RADS_PER_TICK, so pinning
+            # to_rad(measured) == reference inverts to this.
+            zero_offset_ticks=t - j.direction_sign * q * TICKS_PER_RAD,
+            seed_residual_rad=0.0,
+            zero_source="reference_pose",
+        )
+        for j, t, q in zip(calibration.joints, ticks, ref)
+    ]
+    return RobotCalibration(
+        joints=joints,
+        arm_id=calibration.arm_id,
+        validated=False,
+        source=source,
+        notes=dict(calibration.notes),
+    )
 
 
 def seed_from_travel(
@@ -257,6 +350,7 @@ def seed_from_travel(
                 tick_max=int(t_max),
                 seed_residual_rad=residual,
                 span_ratio=measured_span / (u_hi - u_lo),
+                zero_source="travel_and_urdf_limits",
             )
         )
 

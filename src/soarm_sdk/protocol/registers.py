@@ -107,3 +107,25 @@ STS_STATUS = 65
 STS_MOVING = 66
 STS_PRESENT_CURRENT_L = 69
 STS_PRESENT_CURRENT_H = 70
+
+# -------Telemetry block (SRAM read-only, 56..70)--------
+#: First address of the contiguous read-only telemetry block.
+STS_TELEMETRY_START = STS_PRESENT_POSITION_L  # 56
+#: Length in bytes of that block, position through current inclusive.
+#: Addresses 64, 67 and 68 are gaps — read as part of the block, discarded.
+STS_TELEMETRY_LENGTH = STS_PRESENT_CURRENT_H - STS_PRESENT_POSITION_L + 1  # 15
+
+# Sign-bit positions for the sign-magnitude registers. PRESENT_LOAD holds a
+# magnitude of 0..1000 (0.1% PWM duty) in bits 0-9 with direction in bit 10;
+# position, speed and current are sign-magnitude in bit 15. This follows the
+# Feetech SMS/STS convention (cf. ReadCorrection, whose offset register signs
+# at bit 11).
+STS_POSITION_SIGN_BIT = 15
+STS_SPEED_SIGN_BIT = 15
+STS_LOAD_SIGN_BIT = 10
+STS_CURRENT_SIGN_BIT = 15
+
+# Raw LSB -> unit scale factors.
+STS_LOAD_PERCENT_PER_LSB = 0.1
+STS_CURRENT_MA_PER_LSB = 6.5
+STS_VOLTAGE_V_PER_LSB = 0.1

@@ -55,3 +55,39 @@ class JointState:
     velocities: Optional[np.ndarray] = None
     efforts: Optional[np.ndarray] = None
     timestamp: float = 0.0
+
+
+@dataclass
+class ServoHealth:
+    """Per-servo telemetry from the read-only SRAM block (addresses 56-70).
+
+    Distinct from :class:`JointState`, which carries the control-relevant
+    quantities in joint-frame SI units. This is servo-frame diagnostic data:
+    one entry per servo, ordered like the interface's joint IDs.
+
+    Attributes
+    ----------
+    loads_percent : np.ndarray
+        Signed PWM duty, -100.0..100.0. The cheapest torque proxy the servo
+        offers.
+    currents_mA : np.ndarray
+        Signed motor current in mA.
+    voltages_V : np.ndarray
+        Bus voltage at the servo. Sags under load.
+    temperatures_C : np.ndarray
+        Case temperature in degrees Celsius.
+    status_flags : np.ndarray
+        Raw STATUS register byte per servo (overload/overheat/voltage latches).
+    moving : np.ndarray
+        Boolean per servo, the servo's own "still slewing" flag.
+    timestamp : float
+        Monotonic timestamp of the read these values came from.
+    """
+
+    loads_percent: np.ndarray  # (n_joints,)
+    currents_mA: np.ndarray  # (n_joints,)
+    voltages_V: np.ndarray  # (n_joints,)
+    temperatures_C: np.ndarray  # (n_joints,)
+    status_flags: np.ndarray  # (n_joints,) uint8
+    moving: np.ndarray  # (n_joints,) bool
+    timestamp: float = 0.0
