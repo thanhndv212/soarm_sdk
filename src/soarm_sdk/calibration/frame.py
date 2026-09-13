@@ -83,6 +83,13 @@ class JointCalibration:
     seed_residual_rad: float = 0.0
     # measured travel / URDF travel. Should be ~1.0; see SPAN_RATIO_TOLERANCE.
     span_ratio: float = 1.0
+    #: Where this joint's zero came from. Decides what ``span_ratio`` implies:
+    #: a zero *derived from* the URDF's limits is only as good as they are, so
+    #: a span mismatch impeaches it. A zero pinned to a physically verified
+    #: pose does not depend on those limits at all, and the same mismatch then
+    #: says only that the URDF is conservative about travel.
+    #: One of ``travel_and_urdf_limits``, ``reference_pose``, ``unknown``.
+    zero_source: str = "unknown"
 
     def to_rad(self, ticks: float) -> float:
         return self.direction_sign * (ticks - self.zero_offset_ticks) * RADS_PER_TICK
@@ -91,9 +98,25 @@ class JointCalibration:
         return self.zero_offset_ticks + self.direction_sign * rad * TICKS_PER_RAD
 
     @property
-    def suspect(self) -> bool:
-        """True when the span ratio says the two sources disagree materially."""
+    def span_mismatch(self) -> bool:
+        """True when measured travel and the URDF's limits disagree materially.
+
+        A fact about the two sources, independent of how the zero was found.
+        """
         return abs(self.span_ratio - 1.0) > SPAN_RATIO_TOLERANCE
+
+    @property
+    def suspect(self) -> bool:
+        """True when the span mismatch actually impeaches this joint's zero.
+
+        Only when the zero was inferred from the URDF's limits. A zero pinned
+        to a verified pose is unaffected by them being wrong, so the same
+        mismatch is informational there rather than disqualifying — see
+        :func:`rezero_from_pose`. ``unknown`` provenance is treated as
+        limits-derived, since that is what every calibration written before
+        this field existed was.
+        """
+        return self.span_mismatch and self.zero_source != "reference_pose"
 
     @property
     def reachable_rad(self) -> Tuple[float, float]:
@@ -161,7 +184,18 @@ class RobotCalibration:
 
     @property
     def suspect_joints(self) -> List[str]:
+        """Joints whose zero is impeached by a travel/URDF span mismatch."""
         return [j.name for j in self.joints if j.suspect]
+
+    @property
+    def span_mismatch_joints(self) -> List[str]:
+        """Joints whose measured travel disagrees with the URDF, zero aside.
+
+        Worth reporting even when the zero is sound: it means the URDF's
+        limits are not the arm's real reach, so plan against
+        :meth:`reachable_limits` rather than the model's own numbers.
+        """
+        return [j.name for j in self.joints if j.span_mismatch]
 
     @property
     def worst_seed_residual_rad(self) -> float:
@@ -240,6 +274,7 @@ def rezero_from_pose(
             # to_rad(measured) == reference inverts to this.
             zero_offset_ticks=t - j.direction_sign * q * TICKS_PER_RAD,
             seed_residual_rad=0.0,
+            zero_source="reference_pose",
         )
         for j, t, q in zip(calibration.joints, ticks, ref)
     ]
@@ -315,6 +350,7 @@ def seed_from_travel(
                 tick_max=int(t_max),
                 seed_residual_rad=residual,
                 span_ratio=measured_span / (u_hi - u_lo),
+                zero_source="travel_and_urdf_limits",
             )
         )
 

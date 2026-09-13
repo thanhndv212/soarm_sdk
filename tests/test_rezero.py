@@ -86,3 +86,73 @@ def test_wrong_length_inputs_are_rejected():
         rezero_from_pose(_calib(), ticks=[1500])
     with pytest.raises(ValueError):
         rezero_from_pose(_calib(), ticks=[1500, 2500], reference_rad=[0.0])
+
+
+# ---------------------------------------------------------------------------
+# What a span mismatch does and does not impeach
+# ---------------------------------------------------------------------------
+
+
+def _joint(**kw):
+    base = dict(name="j", zero_offset_ticks=2048.0, direction_sign=1,
+                tick_min=100, tick_max=4000, span_ratio=1.0)
+    base.update(kw)
+    return JointCalibration(**base)
+
+
+def test_a_wide_span_impeaches_a_zero_derived_from_urdf_limits():
+    j = _joint(span_ratio=1.34, zero_source="travel_and_urdf_limits")
+
+    assert j.span_mismatch is True
+    assert j.suspect is True
+
+
+def test_a_wide_span_does_not_impeach_a_pose_anchored_zero():
+    # The zero never touched the URDF's limits, so those limits being wrong
+    # about travel says nothing about it.
+    j = _joint(span_ratio=1.34, zero_source="reference_pose")
+
+    assert j.span_mismatch is True   # still a real disagreement, still reported
+    assert j.suspect is False        # but it does not disqualify the zero
+
+
+def test_unknown_provenance_is_treated_as_limits_derived():
+    # Every calibration written before this field existed was seeded, so the
+    # conservative reading is the safe default for old files.
+    assert _joint(span_ratio=1.34).suspect is True
+
+
+def test_a_matching_span_is_never_suspect_either_way():
+    for src in ("travel_and_urdf_limits", "reference_pose", "unknown"):
+        j = _joint(span_ratio=1.02, zero_source=src)
+        assert j.span_mismatch is False
+        assert j.suspect is False
+
+
+def test_seeding_records_that_the_zero_came_from_urdf_limits():
+    from soarm_sdk.calibration.frame import seed_from_travel
+
+    cal = seed_from_travel(["a"], [(-1.0, 1.0)], [(1000, 3000)])
+
+    assert cal.joints[0].zero_source == "travel_and_urdf_limits"
+
+
+def test_rezeroing_records_that_the_zero_came_from_a_pose():
+    out = rezero_from_pose(_calib(), ticks=[1500, 2500])
+
+    assert [j.zero_source for j in out.joints] == ["reference_pose"] * 2
+
+
+def test_the_two_joint_lists_separate_the_two_questions():
+    cal = RobotCalibration(
+        joints=[
+            _joint(name="seeded_wide", span_ratio=1.30,
+                   zero_source="travel_and_urdf_limits"),
+            _joint(name="posed_wide", span_ratio=1.30, zero_source="reference_pose"),
+            _joint(name="narrow", span_ratio=1.01, zero_source="reference_pose"),
+        ],
+        arm_id="arm",
+    )
+
+    assert cal.suspect_joints == ["seeded_wide"]
+    assert cal.span_mismatch_joints == ["seeded_wide", "posed_wide"]

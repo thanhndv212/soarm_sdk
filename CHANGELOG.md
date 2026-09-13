@@ -109,6 +109,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   had been right and the seeding method wrong. With that calibration and the
   SO101 model, the 3-D mirror tracks the physical arm.
 
+- **A span mismatch now only impeaches the zeros it actually informed.**
+  `JointCalibration` gained `zero_source`, and `suspect` is no longer a bare
+  restatement of `span_ratio`: it means "measured travel disagrees with the
+  URDF *and* this joint's zero was inferred from those same limits". A zero
+  pinned by `rezero_from_pose` never touched them, so the same mismatch says
+  only that the URDF is conservative about travel — reported through the new
+  `span_mismatch` / `span_mismatch_joints`, not through `suspect`. Files
+  written before this field default to `unknown`, which is treated as
+  limits-derived, so nothing silently becomes trusted.
+
 ### Changed
 
 - **One launcher for the calibration CLIs.** `examples/` carried
