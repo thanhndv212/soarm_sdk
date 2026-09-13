@@ -62,7 +62,7 @@ class LeRobotRobot(Robot):
     port
         Serial device path (e.g. ``/dev/tty.usbserial-XXXX``).
     config
-        Robot config dict. Defaults to ``soarm100.yaml``.
+        Robot config dict. Defaults to ``so101.yaml``.
     motor_names
         lerobot motor names in joint order. Defaults to
         :data:`DEFAULT_MOTOR_NAMES`.

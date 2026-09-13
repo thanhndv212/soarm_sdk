@@ -33,7 +33,11 @@ from ..dashboard.panels import command, monitor, pid, recorder, setup
 # inside this installed package, so this default only resolves when running
 # from within the soarm-ws workspace layout. Override with --urdf elsewhere.
 _DEFAULT_URDF = (
-    Path(__file__).resolve().parents[4] / "SO-ARM100" / "Simulation" / "SO100" / "so100.urdf"
+    Path(__file__).resolve().parents[4]
+    / "SO-ARM100"
+    / "Simulation"
+    / "SO101"
+    / "so101_new_calib.urdf"
 )
 
 
@@ -46,6 +50,14 @@ def _build_parser(description: str) -> argparse.ArgumentParser:
         "--urdf", type=Path, default=_DEFAULT_URDF, help="URDF file for 3-D visualisation"
     )
     parser.add_argument("--interval-ms", type=int, default=200)
+    parser.add_argument(
+        "--calibration",
+        type=Path,
+        default=None,
+        help="Tick-to-URDF-frame calibration for the 3-D view "
+        "(default: ~/.soarm_sdk/calibration.json). Without one the view "
+        "assumes tick 2048 is zero on every joint and will not match the arm.",
+    )
     parser.add_argument(
         "--stream",
         action="store_true",
@@ -82,6 +94,7 @@ def main(argv: Optional[list] = None) -> None:
         interval_ms=args.interval_ms,
         urdf_path=args.urdf,
         use_stream=args.stream,
+        calibration_path=args.calibration,
     )
 
     for panel in setup.build_all(fk_update_fn=app.fk_update):
@@ -108,6 +121,7 @@ def main_setup(argv: Optional[list] = None) -> None:
         interval_ms=args.interval_ms,
         urdf_path=args.urdf,
         use_stream=args.stream,
+        calibration_path=args.calibration,
     )
     for panel in setup.build_all(fk_update_fn=app.fk_update):
         app.register(panel)

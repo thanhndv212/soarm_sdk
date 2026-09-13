@@ -22,7 +22,7 @@ except ImportError as exc:
     ) from exc
 
 from .context import DashboardContext
-from .fk import SOARM100_IDS, load_urdf_meshes, update_fk
+from .fk import SOARM100_IDS, load_calibration, load_urdf_meshes, update_fk
 
 __all__ = ["Panel", "DashboardApp"]
 
@@ -75,6 +75,7 @@ class DashboardApp:
         joint_ids: Optional[List[int]] = None,
         urdf_path: Optional[Path] = None,
         use_stream: bool = False,
+        calibration_path: Optional[Path] = None,
     ) -> None:
         self.server = viser.ViserServer(port=port)
         self.server.scene.world_axes.visible = True
@@ -84,6 +85,15 @@ class DashboardApp:
             load_urdf_meshes(self.server, urdf_path)
             if urdf_path is not None
             else (None, {})
+        )
+        # Without this the 3-D view renders every joint against a nominal
+        # tick-2048 zero, which no real arm has: the model and the robot then
+        # disagree by tens of degrees and the view looks broken when it is
+        # only uncalibrated.
+        self.calibration = (
+            load_calibration(calibration_path)
+            if self.urdf is not None
+            else None
         )
 
         self.server.gui.add_markdown(f"# {title}")
@@ -130,7 +140,12 @@ class DashboardApp:
         """
         if self.urdf is not None and self._mesh_handles:
             try:
-                update_fk(self.urdf, positions, self._mesh_handles)
+                update_fk(
+                    self.urdf,
+                    positions,
+                    self._mesh_handles,
+                    calibration=self.calibration,
+                )
             except Exception:
                 pass
 

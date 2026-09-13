@@ -122,3 +122,14 @@ def test_robot_context_manager_connects_and_disconnects():
 def test_robot_repr_includes_n_dof():
     robot = _FakeRobot(_TEST_CONFIG)
     assert "n_dof=2" in repr(robot)
+
+
+def test_default_robot_config_is_the_so101():
+    # The physical arm in this workspace is an SO-101. soarm100 stays
+    # loadable, but it must not be what an unqualified call gets.
+    cfg = load_robot_config()
+    assert cfg["name"] == "so101"
+
+
+def test_soarm100_config_is_still_loadable_by_name():
+    assert load_robot_config("soarm100")["name"] == "soarm100"

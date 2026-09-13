@@ -69,6 +69,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compliance downstream of the encoder is invisible to the servo, and closing
   that gap needs an external reference.
 
+- **The 3-D view rendered raw ticks against a nominal zero.** `update_fk` mapped
+  every joint with `ticks_to_radians(ticks)` — tick 2048 is zero, no direction
+  signs — ignoring the arm's saved calibration entirely. On the arm here that
+  put the main joints 16-30 degrees out, the gripper 74 degrees out, and turned
+  `wrist_roll` the wrong way, which reads as the model and the robot
+  disagreeing when only the view was uncalibrated. It now loads
+  `~/.soarm_sdk/calibration.json` (override with `--calibration`) and maps each
+  joint through its own measured zero and sign; with no calibration present it
+  still runs but says so instead of silently rendering wrong.
+- **Defaults moved from the SO-100 to the SO-101 revision** — the arm this
+  workspace actually has. The dashboard URDF is now
+  `SO-ARM100/Simulation/SO101/so101_new_calib.urdf`, and `load_robot_config()`
+  defaults to `so101` rather than `soarm100` (`soarm100` stays loadable by name;
+  the two carry identical limits today and differ only in name and
+  description). This is not cosmetic: the revisions do not share a zero
+  convention — SO100 puts `shoulder_lift` at `[0, 3.5]` and `elbow_flex` at
+  `[-3.1416, 0]` while SO101 centres both at `[-1.745, 1.745]` and
+  `[-1.69, 1.69]`. The saved calibration is SO101-framed (confirmed from its
+  recorded `span_ratio`), so feeding its radians into the SO100 model was wrong
+  by more than a radian on those joints.
+
 ### Changed
 
 - **One launcher for the calibration CLIs.** `examples/` carried

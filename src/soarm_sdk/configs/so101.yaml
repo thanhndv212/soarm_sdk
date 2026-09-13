@@ -19,7 +19,7 @@ description: "SO-101: 6-DOF Feetech STS3215 servo arm with 1-DOF jaw gripper"
 # Order matches servo IDs 1-6.
 n_dof: 6
 
-# URDF joint names, in servo-ID order. Both so100.urdf and
+# URDF joint names, in servo-ID order. Both so101_new_calib.urdf and
 # so101_new_calib.urdf use these, as do lerobot, soarm_mjlab and soarm_tamp;
 # the trailing comments are the servo/assembly labels this file used to
 # carry, kept so the ID mapping is not lost.
