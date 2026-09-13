@@ -130,7 +130,14 @@ class GroupSyncRead:
         if upper < address:
             return False, 0
         snapshot = self.data_dict[servo_id]
-        if not snapshot or len(snapshot) < (data_length + 1):
+        # snapshot is ``[error_byte, *data]``, so the requested field occupies
+        # ``snapshot[offset : offset + data_length]``. Checking only the total
+        # length (the previous behaviour) answers correctly for a field at the
+        # front of the block and wrongly for every field behind it — which was
+        # harmless while the only sync-read group was 4 bytes wide, and is not
+        # once a caller reads a field at the far end of a longer block.
+        offset = address - self.start_address + 1
+        if len(snapshot) < offset + data_length:
             return False, 0
         return True, snapshot[0]
 

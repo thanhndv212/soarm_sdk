@@ -41,6 +41,11 @@ viser = [
 lerobot = [
     "lerobot>=0.1.0",
 ]
+# Only RerunSink needs this, and it defers the import to construction, so the
+# package works fine without it.
+telemetry = [
+    "rerun-sdk>=0.18",
+]
 
 [project.scripts]
 soarm-calibrate = "soarm_sdk.cli.calibrate:main"

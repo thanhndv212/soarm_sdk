@@ -11,8 +11,12 @@ Architecture
 * A **background bus thread** runs at *state_freq* Hz (default 100 Hz) and
   alternates between two operations each tick:
 
-  1. ``GroupSyncRead.txRxPacket`` — reads position, speed, and current from
-     all servos and updates the thread-safe cache.
+  1. ``GroupSyncRead.txRxPacket`` — one transaction reading the whole
+     read-only SRAM telemetry block (addresses 56-70: position, speed, load,
+     voltage, temperature, status, moving, current) from all servos, and
+     updates the thread-safe cache. One transaction per tick is deliberate:
+     bus bandwidth is not the constraint, per-transaction USB turnaround is,
+     so per-servo reads must never appear in this loop.
   2. ``_write_if_pending`` — drains the pending-command slot and sends one
      ``GroupSyncWrite.txPacket`` if a new command is waiting.
 
@@ -60,7 +64,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Sequence, TYPE_CHECKING
+from typing import Callable, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
 import numpy as np
 
@@ -80,11 +84,27 @@ from ..rate_limiter import RateLimiter
 from ..protocol.sts import sts
 from ..protocol.registers import (
     COMM_SUCCESS,
+    STS_CURRENT_MA_PER_LSB,
+    STS_CURRENT_SIGN_BIT,
+    STS_LOAD_PERCENT_PER_LSB,
+    STS_LOAD_SIGN_BIT,
+    STS_MOVING,
+    STS_POSITION_SIGN_BIT,
+    STS_PRESENT_CURRENT_L,
+    STS_PRESENT_LOAD_L,
     STS_PRESENT_POSITION_L,
     STS_PRESENT_SPEED_L,
+    STS_PRESENT_TEMPERATURE,
+    STS_PRESENT_VOLTAGE,
+    STS_SPEED_SIGN_BIT,
+    STS_STATUS,
+    STS_TELEMETRY_LENGTH,
+    STS_TELEMETRY_START,
     STS_TORQUE_ENABLE,
+    STS_VOLTAGE_V_PER_LSB,
 )
-from .types import JointState
+from .telemetry import DEFAULT_BUFFER_SAMPLES, ServoSample, TelemetryStream
+from .types import JointState, ServoHealth
 
 logger = logging.getLogger(__name__)
 
@@ -218,15 +238,35 @@ class ServoHardwareInterface:
         # Servo bus objects — initialised in start()
         self._ph: Optional[PortHandler] = None
         self._srv: Optional[sts] = None
-        self._gsr: Optional[GroupSyncRead] = None  # position + speed (4 bytes)
+        # The full read-only telemetry block, not just position + speed:
+        # 15 bytes costs 1.40 ms/tick on the wire against 0.74 ms for 4, and
+        # buys load/current/voltage/temperature for free relative to the
+        # per-servo reads they would otherwise need.
+        self._gsr: Optional[GroupSyncRead] = None
 
         # Cached state (written by background thread, read by callers)
         self._lock = threading.Lock()
         self._cached_positions_ticks: List[int] = [TICK_ZERO] * n
         self._cached_speeds_ticks: List[int] = [0] * n
         self._cached_currents_mA: List[float] = [0.0] * n
+        self._cached_loads_pct: List[float] = [0.0] * n
+        self._cached_voltages_V: List[float] = [0.0] * n
+        self._cached_temperatures_C: List[int] = [0] * n
+        self._cached_status_flags: List[int] = [0] * n
+        self._cached_moving: List[bool] = [False] * n
         self._last_read_time: float = 0.0
         self._read_errors: int = 0
+
+        # Telemetry subscribers. Nothing is built when the list is empty, so
+        # an interface nobody is watching pays nothing for this.
+        self._stream_lock = threading.Lock()
+        self._streams: List[TelemetryStream] = []
+        self._seq: int = 0
+        # The last command actually put on the wire, so a sample can carry
+        # commanded and measured together. Written by the bus thread only.
+        self._sent_ticks: Optional[List[int]] = None
+        self._sent_speed_ticks: Optional[List[int]] = None
+        self._sent_time: Optional[float] = None
 
         # Pending write command — filled by control thread, drained by bus thread
         self._cmd_lock = threading.Lock()
@@ -254,13 +294,39 @@ class ServoHardwareInterface:
 
         self._srv = sts(self._ph)
 
-        # Register all joint IDs in the sync-read group (position + speed, 4 bytes)
-        self._gsr = self._srv.groupSyncRead
+        # A GroupSyncRead of our own rather than ``self._srv.groupSyncRead``:
+        # that shared instance is 4 bytes wide and other callers (the
+        # dashboard) rely on it staying that way.
+        self._gsr = GroupSyncRead(
+            self._srv, STS_TELEMETRY_START, STS_TELEMETRY_LENGTH
+        )
         self._gsr.clearParam()
         for sid in self._joint_ids:
             self._gsr.addParam(sid)
 
+        # Prime the cache before anything can act on it. Until the first
+        # successful read every joint reports TICK_ZERO — "the arm is at its
+        # zero pose" — which is a lie whenever it is not, and one that has
+        # already cost a real run (see soarm_tamp's README on the first
+        # command being clamped against a placeholder pose).
+        for _ in range(3):
+            self._read_once()
+            if self._last_read_time > 0.0:
+                break
+
         if self._torque_on_start:
+            if self._last_read_time == 0.0:
+                raise RuntimeError(
+                    "cannot enable torque on start: no servo state could be "
+                    "read, so goals cannot be parked at the measured pose and "
+                    "enabling torque would drive the arm toward whatever stale "
+                    "goal is in servo SRAM. Check the bus, or construct with "
+                    "torque_on_start=False."
+                )
+            # Enabling torque makes a servo chase its goal. Park the goal at
+            # the measured pose first or the arm lurches — the same reason
+            # _apply_pending_torque does it.
+            self._park_goals_at_measured()
             for sid in self._joint_ids:
                 self._srv.write1ByteTxRx(sid, STS_TORQUE_ENABLE, 1)
 
@@ -283,6 +349,10 @@ class ServoHardwareInterface:
             self._ph = None
         self._srv = None
         self._gsr = None
+        with self._stream_lock:
+            streams, self._streams = self._streams, []
+        for stream in streams:
+            stream.close()
 
     def __enter__(self) -> "ServoHardwareInterface":
         self.start()
@@ -424,7 +494,9 @@ class ServoHardwareInterface:
     def get_robot_joint_state(self) -> JointState:
         """Return a full :class:`~soarm_sdk.robot.types.JointState` snapshot.
 
-        Includes positions, velocities, and efforts (motor currents in mA).
+        Includes positions, velocities, and efforts (signed motor current in
+        mA, read from the same sync-read as position). For load, voltage,
+        temperature and the status flags see :meth:`get_servo_health`.
         """
         with self._lock:
             pos_ticks = list(self._cached_positions_ticks)
@@ -444,6 +516,25 @@ class ServoHardwareInterface:
             efforts=efforts,
             timestamp=ts,
         )
+
+    def get_servo_health(self) -> ServoHealth:
+        """Return the diagnostic half of the telemetry block.
+
+        Servo-frame data — one entry per servo, ordered like ``joint_ids`` —
+        as opposed to :meth:`get_robot_joint_state`'s joint-frame SI units.
+        All of it comes from the same single sync-read, so every field shares
+        one timestamp and needs no extra bus traffic.
+        """
+        with self._lock:
+            return ServoHealth(
+                loads_percent=np.array(self._cached_loads_pct, dtype=float),
+                currents_mA=np.array(self._cached_currents_mA, dtype=float),
+                voltages_V=np.array(self._cached_voltages_V, dtype=float),
+                temperatures_C=np.array(self._cached_temperatures_C, dtype=float),
+                status_flags=np.array(self._cached_status_flags, dtype=np.uint8),
+                moving=np.array(self._cached_moving, dtype=bool),
+                timestamp=self._last_read_time,
+            )
 
     def get_body_pose(self, body_name: str) -> tuple[np.ndarray, np.ndarray]:
         """Return EE pose via the injected FK function, or raise if none was provided.
@@ -550,6 +641,28 @@ class ServoHardwareInterface:
         """Hold station at the current measured pose. See :meth:`set_torque`."""
         self.set_torque(True, timeout_s=timeout_s)
 
+    def _park_goals_at_measured(self) -> None:
+        """Set every servo's goal to where it currently measures.
+
+        A servo drives to its goal the moment torque is enabled, and that goal
+        is whatever was last written to its SRAM — from a previous session, or
+        from whatever it was chasing when torque was cut. After the arm has
+        been moved by hand, or simply left at an arbitrary pose, that is a
+        lurch. Parking first makes enabling torque a hold rather than a move.
+
+        Requires a fresh measurement in the cache: parking against the
+        ``TICK_ZERO`` seed would command the zero pose, which is the very
+        thing this exists to prevent.
+        """
+        if self._srv is None:
+            return
+        with self._lock:
+            ticks = list(self._cached_positions_ticks)
+        self._srv.groupSyncWrite.clearParam()
+        for sid, t in zip(self._joint_ids, ticks):
+            self._srv.SyncWritePosEx(sid, t, self._default_speed, self._default_acc)
+        self._srv.groupSyncWrite.txPacket()
+
     def _apply_pending_torque(self) -> None:
         """Drain a queued torque request. Runs on the bus thread only."""
         with self._cmd_lock:
@@ -558,15 +671,7 @@ class ServoHardwareInterface:
             return
 
         if want:
-            # Re-enabling: park the goal at where the joint actually *is*, or
-            # the servo drives to whatever it was chasing when torque was cut
-            # — which, after the arm has been moved by hand, is a lurch.
-            with self._lock:
-                ticks = list(self._cached_positions_ticks)
-            self._srv.groupSyncWrite.clearParam()
-            for sid, t in zip(self._joint_ids, ticks):
-                self._srv.SyncWritePosEx(sid, t, self._default_speed, self._default_acc)
-            self._srv.groupSyncWrite.txPacket()
+            self._park_goals_at_measured()
 
         for sid in self._joint_ids:
             self._srv.write1ByteTxRx(sid, STS_TORQUE_ENABLE, 1 if want else 0)
@@ -586,28 +691,168 @@ class ServoHardwareInterface:
         for sid, ticks, spd in zip(self._joint_ids, cmd.ticks_list, cmd.speed_ticks_list):
             self._srv.SyncWritePosEx(sid, ticks, spd, cmd.acc)
         self._srv.groupSyncWrite.txPacket()
+        # Remember what went out: the next tick's sample reports this as the
+        # goal that was in force while it was measured.
+        self._sent_ticks = list(cmd.ticks_list)
+        self._sent_speed_ticks = list(cmd.speed_ticks_list)
+        self._sent_time = time.monotonic()
+
+    # ------------------------------------------------------------------
+    # Telemetry
+    # ------------------------------------------------------------------
+
+    def subscribe(
+        self, *, maxlen: int = DEFAULT_BUFFER_SAMPLES
+    ) -> TelemetryStream:
+        """Start receiving a :class:`ServoSample` per successful bus tick.
+
+        Returns a bounded, drop-oldest queue to drain from your own thread.
+        With no subscribers the bus thread builds nothing, so subscribing is
+        the switch that turns telemetry on.
+
+        The stream keeps filling until :meth:`unsubscribe` or
+        :meth:`TelemetryStream.close`; a consumer that stops draining loses
+        the oldest samples, never the newest.
+        """
+        stream = TelemetryStream(maxlen=maxlen)
+        with self._stream_lock:
+            self._streams.append(stream)
+        return stream
+
+    def unsubscribe(self, stream: TelemetryStream) -> None:
+        """Detach *stream* and close it. Safe to call twice."""
+        with self._stream_lock:
+            if stream in self._streams:
+                self._streams.remove(stream)
+        stream.close()
+
+    @property
+    def subscriber_count(self) -> int:
+        with self._stream_lock:
+            return len(self._streams)
+
+    def _publish_sample(
+        self,
+        t_read: float,
+        pos_ticks: List[int],
+        spd_ticks: List[int],
+        loads_pct: List[float],
+        currents_mA: List[float],
+        voltages_V: List[float],
+        temps_C: List[int],
+        status_flags: List[int],
+        moving: List[bool],
+    ) -> None:
+        """Fan one tick out to every subscriber. Bus thread; must not raise."""
+        with self._stream_lock:
+            streams = list(self._streams)
+        if not streams:
+            return
+
+        goal_ticks = self._sent_ticks
+        goal_rad: Optional[Tuple[float, ...]] = None
+        if goal_ticks is not None:
+            goal_rad = tuple(
+                joint_ticks_to_radians(
+                    goal_ticks, self._zero_offsets, self._direction_signs
+                )
+            )
+
+        sample = ServoSample(
+            t_mono=t_read,
+            seq=self._seq,
+            ids=tuple(self._joint_ids),
+            position_ticks=tuple(pos_ticks),
+            position_rad=tuple(
+                joint_ticks_to_radians(
+                    pos_ticks, self._zero_offsets, self._direction_signs
+                )
+            ),
+            velocity_ticks=tuple(spd_ticks),
+            velocity_rad_s=tuple(speed_ticks_to_rad_s(v) for v in spd_ticks),
+            load_percent=tuple(loads_pct),
+            current_mA=tuple(currents_mA),
+            voltage_V=tuple(voltages_V),
+            temperature_C=tuple(temps_C),
+            status_flags=tuple(status_flags),
+            moving=tuple(moving),
+            goal_position_ticks=(
+                tuple(goal_ticks) if goal_ticks is not None else None
+            ),
+            goal_position_rad=goal_rad,
+            goal_speed_ticks=(
+                tuple(self._sent_speed_ticks)
+                if self._sent_speed_ticks is not None
+                else None
+            ),
+            goal_t_mono=self._sent_time,
+            read_errors=self._read_errors,
+        )
+
+        for stream in streams:
+            try:
+                stream._publish(sample)
+            except Exception:  # pragma: no cover - defensive
+                # A broken consumer must never take the bus thread down with
+                # it: this thread also writes to the servos.
+                logger.exception("telemetry stream rejected a sample")
 
     def _read_once(self) -> None:
         if self._gsr is None or self._srv is None:
             return
+        # seq counts ticks, not published samples: a gap in what a subscriber
+        # sees is how it learns a read failed.
+        self._seq += 1
         result = self._gsr.txRxPacket()
         if result != COMM_SUCCESS:
             self._read_errors += 1
             return
 
+        # Stamp as close to the wire as possible: this is the timestamp every
+        # downstream consumer aligns commanded against measured on.
+        t_read = time.monotonic()
+
         pos_ticks: List[int] = []
         spd_ticks: List[int] = []
+        loads_pct: List[float] = []
+        currents_mA: List[float] = []
+        voltages_V: List[float] = []
+        temps_C: List[int] = []
+        status_flags: List[int] = []
+        moving: List[bool] = []
         all_ok = True
         for sid in self._joint_ids:
-            avail, _ = self._gsr.isAvailable(sid, STS_PRESENT_POSITION_L, 2)
+            # Availability is checked against the LAST register in the block,
+            # so a short or truncated response fails here rather than decoding
+            # into garbage.
+            avail, _ = self._gsr.isAvailable(sid, STS_PRESENT_CURRENT_L, 2)
             if not avail:
                 all_ok = False
                 break
             raw_pos = self._gsr.getData(sid, STS_PRESENT_POSITION_L, 2)
             raw_spd = self._gsr.getData(sid, STS_PRESENT_SPEED_L, 2)
-            # Decode sign bits (15-bit signed)
-            pos_ticks.append(self._srv.sts_tohost(raw_pos, 15))
-            spd_ticks.append(self._srv.sts_tohost(raw_spd, 15))
+            raw_load = self._gsr.getData(sid, STS_PRESENT_LOAD_L, 2)
+            raw_curr = self._gsr.getData(sid, STS_PRESENT_CURRENT_L, 2)
+            raw_volt = self._gsr.getData(sid, STS_PRESENT_VOLTAGE, 1)
+            raw_temp = self._gsr.getData(sid, STS_PRESENT_TEMPERATURE, 1)
+            raw_status = self._gsr.getData(sid, STS_STATUS, 1)
+            raw_moving = self._gsr.getData(sid, STS_MOVING, 1)
+
+            # Sign-magnitude decode: the sign bit differs per register.
+            pos_ticks.append(self._srv.sts_tohost(raw_pos, STS_POSITION_SIGN_BIT))
+            spd_ticks.append(self._srv.sts_tohost(raw_spd, STS_SPEED_SIGN_BIT))
+            loads_pct.append(
+                self._srv.sts_tohost(raw_load, STS_LOAD_SIGN_BIT)
+                * STS_LOAD_PERCENT_PER_LSB
+            )
+            currents_mA.append(
+                self._srv.sts_tohost(raw_curr, STS_CURRENT_SIGN_BIT)
+                * STS_CURRENT_MA_PER_LSB
+            )
+            voltages_V.append(raw_volt * STS_VOLTAGE_V_PER_LSB)
+            temps_C.append(raw_temp)
+            status_flags.append(raw_status)
+            moving.append(bool(raw_moving))
 
         if not all_ok or len(pos_ticks) != len(self._joint_ids):
             self._read_errors += 1
@@ -616,4 +861,22 @@ class ServoHardwareInterface:
         with self._lock:
             self._cached_positions_ticks = pos_ticks
             self._cached_speeds_ticks = spd_ticks
-            self._last_read_time = time.monotonic()
+            self._cached_loads_pct = loads_pct
+            self._cached_currents_mA = currents_mA
+            self._cached_voltages_V = voltages_V
+            self._cached_temperatures_C = temps_C
+            self._cached_status_flags = status_flags
+            self._cached_moving = moving
+            self._last_read_time = t_read
+
+        self._publish_sample(
+            t_read,
+            pos_ticks,
+            spd_ticks,
+            loads_pct,
+            currents_mA,
+            voltages_V,
+            temps_C,
+            status_flags,
+            moving,
+        )
