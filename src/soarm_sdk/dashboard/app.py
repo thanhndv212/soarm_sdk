@@ -8,6 +8,7 @@ connection handling / bus access / background polling is written once.
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,8 @@ except ImportError as exc:
 
 from .context import DashboardContext
 from .fk import SOARM100_IDS, load_calibration, load_urdf_meshes, update_fk
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["Panel", "DashboardApp"]
 
@@ -123,8 +126,15 @@ class DashboardApp:
             joint_ids=joint_ids if joint_ids is not None else list(SOARM100_IDS),
             use_stream=use_stream,
         )
+        # The 3-D view reads the calibration through the context rather than
+        # off this object, so a panel can correct a bad zero and have the
+        # mirror follow immediately — the whole point of the Calibration tab.
+        self.ctx.calibration = self.calibration
+        self.ctx.calibration_path = calibration_path
+        self.ctx.urdf = self.urdf
 
         self._panels: List[Panel] = []
+        self._fk_error_logged = False
 
     def register(self, panel: Panel) -> "DashboardApp":
         """Register a panel; returns ``self`` so calls can be chained."""
@@ -138,16 +148,24 @@ class DashboardApp:
         panels that animate a simulated sweep (see the Homing Wizard panel)
         call this directly instead of waiting for the background refresh.
         """
-        if self.urdf is not None and self._mesh_handles:
-            try:
-                update_fk(
-                    self.urdf,
-                    positions,
-                    self._mesh_handles,
-                    calibration=self.calibration,
-                )
-            except Exception:
-                pass
+        if self.urdf is None or not self._mesh_handles:
+            return
+        try:
+            update_fk(
+                self.urdf,
+                positions,
+                self._mesh_handles,
+                joint_ids=list(self.ctx.joint_ids),
+                calibration=self.ctx.calibration,
+            )
+        except Exception:
+            # Swallowed per frame, but said once. This ran ~10 Hz inside a
+            # bare `except: pass`, so a URDF that could not be posed looked
+            # exactly like an arm that was not moving — the mirror simply
+            # froze, with nothing anywhere to say why.
+            if not self._fk_error_logged:
+                self._fk_error_logged = True
+                logger.exception("[soarm_sdk.dashboard] FK update failed")
 
     def run(self) -> None:
         """Build all registered panels as tabs, then block.

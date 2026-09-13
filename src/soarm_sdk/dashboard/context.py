@@ -88,6 +88,14 @@ class DashboardContext:
         self._interface: Optional[Any] = None
         self._stream: Optional[Any] = None
 
+        # Set by DashboardApp once the URDF and calibration are loaded. They
+        # live here, not on the app, because the 3-D view and the Calibration
+        # tab have to agree about which calibration is in force: the tab
+        # rewrites this attribute and the next FK tick picks it up.
+        self.calibration: Optional[Any] = None
+        self.calibration_path: Optional[Any] = None
+        self.urdf: Optional[Any] = None
+
     # ------------------------------------------------------------------
     # Bus access
     # ------------------------------------------------------------------

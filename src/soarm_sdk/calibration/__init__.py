@@ -11,6 +11,8 @@ question: *what tick value means zero radians to the URDF?*
   existing lerobot calibration file (the ``soarm-seed-calibration`` CLI).
 - :mod:`soarm_sdk.calibration.rom_sweep` — the range-of-motion sweep that
   produces the measured travel :func:`~frame.seed_from_travel` consumes.
+- :mod:`soarm_sdk.calibration.reference` — the named physical poses a zero
+  can be pinned to, checked against the URDF rather than described in prose.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from .frame import (
     seed_from_travel,
     seed_from_lerobot,
 )
+from .reference import REFERENCE_POSES, ReferencePose
 from .rom_sweep import run_rom_sweep, simulate_rom_sweep
 
 __all__ = [
@@ -30,6 +33,8 @@ __all__ = [
     "rezero_from_pose",
     "seed_from_travel",
     "seed_from_lerobot",
+    "REFERENCE_POSES",
+    "ReferencePose",
     "run_rom_sweep",
     "simulate_rom_sweep",
 ]

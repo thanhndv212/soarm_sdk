@@ -27,7 +27,7 @@ from typing import Optional
 
 from .. import get_available_ports
 from ..dashboard import DashboardApp
-from ..dashboard.panels import command, monitor, pid, recorder, setup
+from ..dashboard.panels import calibration, command, monitor, pid, recorder, setup
 
 # A URDF is workspace-relative (a sibling SO-ARM100/ checkout), not shipped
 # inside this installed package, so this default only resolves when running
@@ -99,6 +99,7 @@ def main(argv: Optional[list] = None) -> None:
 
     for panel in setup.build_all(fk_update_fn=app.fk_update):
         app.register(panel)
+    app.register(calibration.build_calibration_panel())
     app.register(command.build_command_panel())
     app.register(pid.build_pid_panel())
     app.register(monitor.build_monitor_panel())
@@ -125,6 +126,9 @@ def main_setup(argv: Optional[list] = None) -> None:
     )
     for panel in setup.build_all(fk_update_fn=app.fk_update):
         app.register(panel)
+    # A fresh arm is precisely when the zeros are wrong, so this belongs in
+    # the setup-only dashboard too, not just the full one.
+    app.register(calibration.build_calibration_panel())
     app.run()
 
 

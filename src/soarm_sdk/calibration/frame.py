@@ -97,6 +97,25 @@ class JointCalibration:
     def to_ticks(self, rad: float) -> float:
         return self.zero_offset_ticks + self.direction_sign * rad * TICKS_PER_RAD
 
+    def shifted_by(self, delta_rad: float) -> "JointCalibration":
+        """Copy of this joint whose reported angle moves by *delta_rad*.
+
+        Moves the zero, not the reading: the servo still reports the same
+        ticks, and this changes what those ticks are taken to mean. Used to
+        dial the model onto an arm the operator can see — nudge until the
+        rendered member lies where the real one does, then save.
+
+        The shift is in URDF radians and signed in the URDF's frame, so the
+        caller does not have to think about ``direction_sign``; it is folded
+        in here, the same way :meth:`to_ticks` folds it in.
+        """
+        return replace(
+            self,
+            zero_offset_ticks=self.zero_offset_ticks
+            - self.direction_sign * delta_rad * TICKS_PER_RAD,
+            zero_source="manual_nudge",
+        )
+
     @property
     def span_mismatch(self) -> bool:
         """True when measured travel and the URDF's limits disagree materially.
@@ -234,6 +253,7 @@ def rezero_from_pose(
     ticks: Sequence[float],
     reference_rad: Optional[Sequence[float]] = None,
     *,
+    only: Optional[Sequence[str]] = None,
     source: str = "re-zeroed from a physically held reference pose",
 ) -> "RobotCalibration":
     """Recompute zero offsets from ticks measured at a *known* configuration.
@@ -251,10 +271,29 @@ def rezero_from_pose(
     ticks there, and pin the zeros to that. No dependence on the URDF's limits
     at all.
 
-    *reference_rad* defaults to all zeros — for the SO-101 that is the upper
-    arm vertical and the forearm horizontal. Measured travel is carried over
-    unchanged, so :meth:`reachable_rad` still reports the real hard stops, and
-    ``span_ratio`` is preserved as the record that they disagree with the URDF.
+    *reference_rad* defaults to all zeros, which is the URDF's kinematic zero
+    and **not** a pose anyone can hold the arm in by eye: there the upper arm
+    sits at +76.03 deg and the forearm at +2.21 deg. The pose that *is*
+    checkable — upper arm vertical, forearm level — is
+    :data:`soarm_sdk.calibration.reference.LEVEL`, at
+    ``(0, -0.2438, +0.2823, -0.0881, 0, 0)``. Pass one of
+    :data:`~soarm_sdk.calibration.reference.REFERENCE_POSES` rather than
+    relying on the default; an earlier version of this docstring claimed the
+    default *was* the level pose, and re-zeroing on that claim puts
+    ``shoulder_lift`` 13.97 deg and ``elbow_flex`` 16.17 deg out, in opposite
+    directions.
+
+    Measured travel is carried over unchanged, so :meth:`reachable_rad` still
+    reports the real hard stops, and ``span_ratio`` is preserved as the record
+    that they disagree with the URDF.
+
+    *only* restricts the re-zero to the named joints, leaving the rest exactly
+    as they were. A reference pose constrains the joints it visibly constrains
+    and no others — standing the arm up level says nothing about where
+    ``wrist_roll`` is, and pinning its zero to "whatever it happened to read"
+    would replace a seeded guess with a differently-wrong one while relabelling
+    it ``reference_pose``, i.e. trustworthy. Pass
+    :attr:`~soarm_sdk.calibration.reference.ReferencePose.covers`.
 
     The result is ``validated=False``: pinning the zero to a pose you believe
     in is not the same as confirming it, and the direction signs are inherited
@@ -266,6 +305,13 @@ def rezero_from_pose(
     ref = [0.0] * n if reference_rad is None else list(reference_rad)
     if len(ref) != n:
         raise ValueError(f"expected {n} reference angles, got {len(ref)}")
+    if only is not None:
+        chosen = set(only)
+        unknown = chosen - {j.name for j in calibration.joints}
+        if unknown:
+            raise KeyError(f"not joints of this arm: {', '.join(sorted(unknown))}")
+    else:
+        chosen = {j.name for j in calibration.joints}
 
     joints = [
         replace(
@@ -276,6 +322,8 @@ def rezero_from_pose(
             seed_residual_rad=0.0,
             zero_source="reference_pose",
         )
+        if j.name in chosen
+        else j
         for j, t, q in zip(calibration.joints, ticks, ref)
     ]
     return RobotCalibration(

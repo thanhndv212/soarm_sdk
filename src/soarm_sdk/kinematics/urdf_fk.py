@@ -29,7 +29,22 @@ __all__ = [
     "mat3_to_wxyz",
     "load_urdf",
     "link_transforms",
+    "MEMBERS",
+    "member_pitches",
 ]
+
+#: The arm's three visible straight sections, as ``(name, from_link, to_link)``.
+#:
+#: Each is a rigid member whose pitch an operator can measure directly —
+#: a phone inclinometer laid on it, or a spirit level. That is the whole
+#: point: a joint angle is a number inside the model with no independent
+#: witness, but "is the forearm level?" is a question the arm itself
+#: answers. Every zero in the calibration was ultimately pinned this way.
+MEMBERS: Tuple[Tuple[str, str, str], ...] = (
+    ("upper_arm", "upper_arm_link", "lower_arm_link"),
+    ("forearm", "lower_arm_link", "wrist_link"),
+    ("wrist_section", "wrist_link", "gripper_link"),
+)
 
 
 def mat3_to_wxyz(R: np.ndarray) -> np.ndarray:
@@ -94,4 +109,36 @@ def link_transforms(
     for node_name in scene.graph.nodes_geometry:
         T_world, _ = scene.graph[node_name]
         out[node_name] = (mat3_to_wxyz(T_world[:3, :3]), T_world[:3, 3])
+    return out
+
+
+def member_pitches(
+    urdf: "yourdfpy.URDF",
+    cfg: Dict[str, float],
+) -> Dict[str, float]:
+    """Pitch above horizontal, in degrees, of each member in :data:`MEMBERS`.
+
+    The bridge between a joint configuration and something an operator can
+    check without trusting the calibration: put the arm in a pose, read
+    these numbers off the model, and compare them to a level held against
+    the real member. A disagreement here is the calibration's zero being
+    wrong, stated in the one unit the hardware can be measured in.
+
+    Members whose links the URDF does not carry are omitted rather than
+    guessed at.
+    """
+    urdf.update_cfg({k: float(v) for k, v in cfg.items()})
+    scene = urdf.scene
+    out: Dict[str, float] = {}
+    for name, from_link, to_link in MEMBERS:
+        try:
+            T_from, _ = scene.graph[from_link]
+            T_to, _ = scene.graph[to_link]
+        except Exception:
+            continue
+        v = T_to[:3, 3] - T_from[:3, 3]
+        norm = float(np.linalg.norm(v))
+        if norm < 1e-9:
+            continue
+        out[name] = float(np.degrees(np.arcsin(v[2] / norm)))
     return out
