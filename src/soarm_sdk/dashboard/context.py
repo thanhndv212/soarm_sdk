@@ -8,6 +8,7 @@ the background" — it just reads ``ctx.state`` or calls ``ctx.bus()``.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from contextlib import contextmanager
@@ -22,6 +23,8 @@ from ..protocol.registers import (
     STS_PRESENT_SPEED_L,
 )
 from ..protocol.sts import sts as _Sts
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["JointState", "DashboardContext"]
 
@@ -60,6 +63,7 @@ class DashboardContext:
         interval_h: Any,
         conn_status_md: Any,
         joint_ids: List[int],
+        use_stream: bool = False,
     ) -> None:
         self.device_h = device_h
         self.baud_h = baud_h
@@ -75,6 +79,15 @@ class DashboardContext:
         self._poll_thread: Optional[threading.Thread] = None
         self._sample_hooks: List[SampleHook] = []
 
+        # Streaming mode: one ServoHardwareInterface holds the port open and
+        # the dashboard consumes its telemetry stream, instead of reopening
+        # the port every poll iteration and issuing per-servo health reads.
+        # Opt-in for now; the legacy poll loop below stays until it has run
+        # on hardware for a release.
+        self.use_stream = use_stream
+        self._interface: Optional[Any] = None
+        self._stream: Optional[Any] = None
+
     # ------------------------------------------------------------------
     # Bus access
     # ------------------------------------------------------------------
@@ -87,6 +100,14 @@ class DashboardContext:
 
         Defaults to the sidebar's device/baud fields when not given explicitly.
         """
+        # In streaming mode the interface owns the port, so a second
+        # PortHandler on the same device would simply fail. Borrow its handle
+        # instead — every existing caller keeps working unchanged.
+        if self._interface is not None:
+            with self._interface.lend_bus() as srv:
+                yield srv
+            return
+
         dev = device if device is not None else self.device_h.value
         bd = baud if baud is not None else int(self.baud_h.value)
         with self._bus_lock:
@@ -138,6 +159,9 @@ class DashboardContext:
         interval_s = float(self.interval_h.value) / 1000.0
         device = self.device_h.value
         baud = int(self.baud_h.value)
+        if self.use_stream:
+            self._start_stream(device, baud)
+            return
         t = threading.Thread(
             target=self._poll_loop,
             args=(device, baud, interval_s),
@@ -153,9 +177,97 @@ class DashboardContext:
         if self._poll_thread is not None and self._poll_thread.is_alive():
             self._poll_thread.join(timeout=3.0)
         self._poll_thread = None
+        if self._interface is not None:
+            iface, self._interface = self._interface, None
+            self._stream = None
+            try:
+                iface.stop()
+            except Exception:  # pragma: no cover - defensive teardown
+                pass
         with self.lock:
             self.state.connected = False
         self.conn_status_md.content = "*Disconnected.*"
+
+    # ------------------------------------------------------------------
+    # Streaming mode (opt-in): consume ServoHardwareInterface telemetry
+    # ------------------------------------------------------------------
+
+    def _start_stream(self, device: str, baud: int) -> None:
+        """Hold the port open with one interface and consume its telemetry.
+
+        Replaces two costs the legacy poll loop pays every cycle: reopening
+        the serial port (milliseconds, and it resets the device), and — every
+        fifth poll — twelve per-servo round trips for temperature and current,
+        measured at 7.36 ms against a 2.09 ms full-block sync-read that
+        carries the same fields. Here they arrive in the block, every tick.
+        """
+        from ..robot.hardware import ServoHardwareInterface
+
+        try:
+            iface = ServoHardwareInterface(
+                port=device,
+                baud=baud,
+                joint_ids=list(self.joint_ids),
+                # The dashboard must never energise the arm just by connecting.
+                torque_on_start=False,
+            )
+            iface.start()
+        except Exception as exc:
+            with self.lock:
+                self.state.connected = False
+                self.state.poll_error = str(exc)
+            self.conn_status_md.content = f"*Connect failed: {exc}*"
+            return
+
+        self._interface = iface
+        self._stream = iface.subscribe(maxlen=2000)
+        t = threading.Thread(target=self._stream_loop, daemon=True)
+        t.start()
+        self._poll_thread = t
+        self.conn_status_md.content = (
+            f"**Streaming** `{device}` @ {baud} baud "
+            f"({iface._state_freq:.0f} Hz)"
+        )
+
+    def _stream_loop(self) -> None:
+        """Drain telemetry into ``self.state``. Never touches the serial port."""
+        count = 0
+        while not self.stop_event.is_set():
+            stream = self._stream
+            if stream is None:
+                break
+            if not stream.wait(timeout=0.2):
+                continue
+            samples = stream.drain()
+            if not samples:
+                continue
+            latest = samples[-1]
+            new_pos = dict(zip(latest.ids, latest.position_ticks))
+            new_spd = dict(zip(latest.ids, latest.velocity_ticks))
+            with self.lock:
+                self.state.positions.update(new_pos)
+                self.state.speeds.update(new_spd)
+                # Health data is in every sample now, not every fifth poll.
+                self.state.temps.update(
+                    dict(zip(latest.ids, latest.temperature_C))
+                )
+                self.state.currents.update(
+                    dict(zip(latest.ids, latest.current_mA))
+                )
+                self.state.connected = True
+                self.state.poll_error = None
+                self.state.poll_count = latest.seq
+            # One hook call per drain rather than per sample: hooks exist to
+            # feed the GUI, which repaints at ~10 Hz and cannot use 100.
+            count += 1
+            for hook in self._sample_hooks:
+                try:
+                    hook(count, new_pos, new_spd)
+                except Exception:
+                    # A broken hook used to surface as "disconnected", because
+                    # it raised inside the poll loop's shared try. It is a hook
+                    # bug, not a bus failure; keep them apart.
+                    logger.exception("dashboard sample hook raised")
 
     def _poll_loop(self, device: str, baud: int, interval_s: float) -> None:
         poll_count = 0

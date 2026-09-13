@@ -46,6 +46,15 @@ def _build_parser(description: str) -> argparse.ArgumentParser:
         "--urdf", type=Path, default=_DEFAULT_URDF, help="URDF file for 3-D visualisation"
     )
     parser.add_argument("--interval-ms", type=int, default=200)
+    parser.add_argument(
+        "--stream",
+        action="store_true",
+        help="Hold the serial port open with one ServoHardwareInterface and "
+        "consume its telemetry stream, instead of reopening the port every "
+        "poll. Temperature and current then arrive every tick rather than "
+        "every fifth poll, and the periodic 7 ms stall from twelve "
+        "per-servo health reads goes away. Opt-in while it beds in.",
+    )
     return parser
 
 
@@ -72,6 +81,7 @@ def main(argv: Optional[list] = None) -> None:
         baud=args.baud,
         interval_ms=args.interval_ms,
         urdf_path=args.urdf,
+        use_stream=args.stream,
     )
 
     for panel in setup.build_all(fk_update_fn=app.fk_update):
@@ -97,6 +107,7 @@ def main_setup(argv: Optional[list] = None) -> None:
         baud=args.baud,
         interval_ms=args.interval_ms,
         urdf_path=args.urdf,
+        use_stream=args.stream,
     )
     for panel in setup.build_all(fk_update_fn=app.fk_update):
         app.register(panel)

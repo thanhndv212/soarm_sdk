@@ -73,6 +73,14 @@ from .protocol.registers import (
     STS_TORQUE_ENABLE,
 )
 
+# -- Characterisation rigs ---------------------------------------------------
+from .diagnostics import (
+    BacklashResult,
+    DroopResult,
+    measure_backlash,
+    measure_droop,
+)
+
 # -- Robot interface layer: types, Protocol, backends ------------------------
 from .robot import (
     Pose,
@@ -161,6 +169,10 @@ __all__ = [
     "TelemetryRecorder",
     "JsonlSink",
     "RerunSink",
+    "BacklashResult",
+    "DroopResult",
+    "measure_backlash",
+    "measure_droop",
     "RobotInterface",
     "ConfigError",
     "Robot",

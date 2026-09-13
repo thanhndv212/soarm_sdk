@@ -74,6 +74,7 @@ class DashboardApp:
         interval_ms: int = 200,
         joint_ids: Optional[List[int]] = None,
         urdf_path: Optional[Path] = None,
+        use_stream: bool = False,
     ) -> None:
         self.server = viser.ViserServer(port=port)
         self.server.scene.world_axes.visible = True
@@ -110,6 +111,7 @@ class DashboardApp:
             interval_h=interval_h,
             conn_status_md=conn_status_md,
             joint_ids=joint_ids if joint_ids is not None else list(SOARM100_IDS),
+            use_stream=use_stream,
         )
 
         self._panels: List[Panel] = []

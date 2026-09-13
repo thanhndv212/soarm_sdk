@@ -45,6 +45,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one broken sink cannot cost the others their data. `rerun-sdk` is not a
   dependency — it is the new `[telemetry]` extra, imported at construction.
 
+- **The dashboard can consume the telemetry stream instead of polling**
+  (`soarm-dashboard --stream`, off by default while it beds in). One
+  `ServoHardwareInterface` holds the port open and the dashboard drains its
+  samples, which removes the two costs the legacy loop paid every cycle:
+  reopening the serial port each iteration, and twelve per-servo round trips
+  for temperature and current every fifth poll — measured at 7.36 ms against a
+  2.09 ms full-block sync-read carrying the same fields. Health data now
+  arrives every tick rather than every fifth poll. The dashboard connects with
+  `torque_on_start=False`: opening a browser tab must never energise the arm.
+- **`ServoHardwareInterface.lend_bus()`** — pause the bus thread and hand the
+  caller the live servo handle. The port is exclusive, so the dashboard's 19
+  `ctx.bus()` call sites (EEPROM writes, servo ID changes, one-off diagnostics)
+  cannot open their own connection while the interface holds it; they borrow
+  this one and are otherwise unchanged. Measured hand-over on hardware: 0.01 ms,
+  because the lock is free during the inter-tick sleep.
+- **`soarm_sdk.diagnostics`** — `measure_backlash()` drives a joint to one
+  target from below and from above and reports the hysteresis gap against
+  within-direction scatter, so a gap smaller than the repeat noise is reported
+  as insignificant rather than as a result. `measure_droop()` sweeps a joint and
+  records settled position, load and current together from the same samples.
+  Its steady-state error is documented as a **lower bound** on true deflection:
+  compliance downstream of the encoder is invisible to the servo, and closing
+  that gap needs an external reference.
+
 ### Changed
 
 - **One launcher for the calibration CLIs.** `examples/` carried

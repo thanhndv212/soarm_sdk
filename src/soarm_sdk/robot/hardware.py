@@ -63,8 +63,17 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Sequence, Tuple, TYPE_CHECKING
+from typing import (
+    Callable,
+    Generator,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    TYPE_CHECKING,
+)
 
 import numpy as np
 
@@ -278,6 +287,10 @@ class ServoHardwareInterface:
 
         self._thread: Optional[threading.Thread] = None
         self._running = False
+        # Held by the bus thread for the duration of each tick's I/O, and by
+        # lend_bus() while a caller borrows the port. Deliberately NOT held
+        # across the inter-tick sleep, so a borrower waits at most one tick.
+        self._io_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -588,10 +601,47 @@ class ServoHardwareInterface:
     def _read_loop(self) -> None:
         rate = RateLimiter(frequency=self._state_freq, warn=False)
         while self._running:
-            self._read_once()
-            self._apply_pending_torque()  # before the write: a limp joint takes no goal
-            self._write_if_pending()  # serial: write only after read, bus is free
+            with self._io_lock:
+                self._read_once()
+                self._apply_pending_torque()  # before the write: a limp joint takes no goal
+                self._write_if_pending()  # serial: write only after read, bus is free
             rate.sleep()
+
+    @contextmanager
+    def lend_bus(
+        self, *, timeout_s: float = 2.0
+    ) -> Generator["sts", None, None]:
+        """Pause the bus thread and hand the caller the live servo handle.
+
+        The serial port is exclusive, so code that needs register access the
+        interface does not wrap — EEPROM configuration, servo ID changes, a
+        one-off diagnostic read — cannot simply open its own connection while
+        this interface holds the port. It borrows this one instead.
+
+        The bus thread finishes its current tick and then blocks, so a borrower
+        waits at most one tick period. State goes stale for the duration:
+        :meth:`state_age` grows and subscribers see a gap in ``seq``, which is
+        correct — nothing was measured while somebody else owned the wire.
+
+        ::
+
+            with hw.lend_bus() as srv:
+                srv.write1ByteTxRx(sid, STS_ACC, 20)
+
+        Raises :class:`TimeoutError` rather than waiting forever, since the
+        usual cause is another borrower holding the bus.
+        """
+        if self._srv is None:
+            raise RuntimeError("lend_bus() needs an open port; call start() first")
+        if not self._io_lock.acquire(timeout=timeout_s):
+            raise TimeoutError(
+                f"could not borrow the servo bus within {timeout_s:.1f}s — "
+                "another caller is holding it"
+            )
+        try:
+            yield self._srv
+        finally:
+            self._io_lock.release()
 
     # ------------------------------------------------------------------
     # Torque
