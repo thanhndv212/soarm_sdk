@@ -9,6 +9,7 @@ the background" — it just reads ``ctx.state`` or calls ``ctx.bus()``.
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
 from contextlib import contextmanager
@@ -95,6 +96,48 @@ class DashboardContext:
         self.calibration: Optional[Any] = None
         self.calibration_path: Optional[Any] = None
         self.urdf: Optional[Any] = None
+
+    # ------------------------------------------------------------------
+    # Calibration: the 3-D view's copy vs. the one on disk
+    # ------------------------------------------------------------------
+
+    def calibration_drift(self) -> List[tuple]:
+        """``[(joint, degrees)]`` where the live calibration differs from disk.
+
+        The 3-D mirror renders :attr:`calibration`, which a panel can edit in
+        memory. Everything else re-reads the file: the planner runs in a
+        container and can only ever see a file, and the pose capture, the
+        executor and the manifest player each load their own copy. So an
+        unsaved edit means the mirror is showing one arm and the planner is
+        planning for another, with nothing on screen to say so.
+
+        Empty when they agree, when there is nothing loaded, or when the file
+        is unreadable — this reports a divergence it can actually demonstrate,
+        and a missing file is a different problem with its own message.
+        """
+        cal = self.calibration
+        if cal is None or self.calibration_path is None:
+            return []
+        try:
+            from ..calibration.frame import RobotCalibration
+
+            on_disk = RobotCalibration.load(self.calibration_path)
+        except Exception:
+            return []
+
+        saved = {j.name: j for j in on_disk.joints}
+        out: List[tuple] = []
+        for j in cal.joints:
+            other = saved.get(j.name)
+            if other is None:
+                continue
+            # Compare what the ticks are taken to mean, not the stored
+            # numbers: a zero shift and a sign flip can cancel in the fields
+            # and still render the arm somewhere else entirely.
+            delta = math.degrees(j.to_rad(0.0) - other.to_rad(0.0))
+            if abs(delta) > 0.01 or j.direction_sign != other.direction_sign:
+                out.append((j.name, delta))
+        return out
 
     # ------------------------------------------------------------------
     # Bus access

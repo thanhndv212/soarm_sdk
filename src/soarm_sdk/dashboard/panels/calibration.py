@@ -254,6 +254,32 @@ def _format_symmetry(cal: Optional[RobotCalibration]) -> str:
     return "\n".join(rows)
 
 
+def _format_drift(ctx: Any) -> str:
+    """Say when the mirror and the planner are looking at different arms.
+
+    Only the 3-D view reads the in-memory calibration. The planner runs in
+    a container and can see nothing but the file; the pose capture, the
+    executor and the manifest player each load their own copy from it. An
+    unsaved edit is therefore not a pending change, it is a live
+    disagreement — and the mirror, being the one thing that shows the edit,
+    is the one place it looks like everything is fine.
+    """
+    try:
+        drift = ctx.calibration_drift()
+    except Exception:
+        return ""
+    if not drift:
+        return ""
+    worst = ", ".join(f"{n} {d:+.1f}°" for n, d in drift)
+    return (
+        "🔴 **Unsaved — the mirror and the planner disagree.** This view is "
+        f"showing {worst} relative to the calibration on disk, and the "
+        "planner, the pose capture and the executor all read the file. "
+        "**Save** below before planning or executing; planning is blocked "
+        "until you do."
+    )
+
+
 def _on_tick(ctx: Any, handles: Dict[str, Any]) -> None:
     if not handles:
         return
@@ -266,6 +292,7 @@ def _on_tick(ctx: Any, handles: Dict[str, Any]) -> None:
     rows = _joint_rows(ctx, positions)
     handles["rows"] = rows
     handles["symmetry_md"].content = _format_symmetry(getattr(ctx, "calibration", None))
+    handles["drift_md"].content = _format_drift(ctx)
     handles["table_md"].content = _format_table(rows, getattr(ctx, "calibration", None))
     handles["members_md"].content = _format_members(ctx, rows)
 
@@ -295,6 +322,7 @@ def _build(server: Any, ctx: Any, handles: Dict[str, Any]) -> None:
     )
 
     with server.gui.add_folder("Live"):
+        handles["drift_md"] = server.gui.add_markdown("")
         handles["outside_md"] = server.gui.add_markdown("")
         handles["table_md"] = server.gui.add_markdown("*Waiting…*")
 

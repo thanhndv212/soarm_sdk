@@ -23,7 +23,13 @@ except ImportError as exc:
     ) from exc
 
 from .context import DashboardContext
-from .fk import SOARM100_IDS, load_calibration, load_urdf_meshes, update_fk
+from .fk import (
+    DEFAULT_CALIBRATION_PATH,
+    SOARM100_IDS,
+    load_calibration,
+    load_urdf_meshes,
+    update_fk,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +136,15 @@ class DashboardApp:
         # off this object, so a panel can correct a bad zero and have the
         # mirror follow immediately — the whole point of the Calibration tab.
         self.ctx.calibration = self.calibration
-        self.ctx.calibration_path = calibration_path
+        # The *resolved* path, never the argument. Callers that take the
+        # default pass None, and storing that made calibration_drift() report
+        # "nothing to compare" forever — so every consistency check downstream
+        # silently passed, which is the failure it exists to catch.
+        self.ctx.calibration_path = (
+            Path(calibration_path)
+            if calibration_path is not None
+            else DEFAULT_CALIBRATION_PATH
+        )
         self.ctx.urdf = self.urdf
 
         self._panels: List[Panel] = []

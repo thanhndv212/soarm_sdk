@@ -7,6 +7,7 @@ calibration file*, and those are ordinary functions over ordinary data.
 
 from __future__ import annotations
 
+import inspect
 import math
 
 import pytest
@@ -311,3 +312,88 @@ def test_the_gripper_is_excused_from_the_symmetry_check():
 
 def test_symmetry_check_is_silent_without_a_calibration():
     assert _format_symmetry(None) == ""
+
+
+# -- the mirror and the file must not diverge silently ------------------
+
+
+def _ctx_with_disk(tmp_path, live, saved):
+    """A context whose in-memory calibration is *live* and whose file is *saved*."""
+    from soarm_sdk.dashboard.context import DashboardContext
+
+    path = tmp_path / "calibration.json"
+    saved.save(path)
+    ctx = DashboardContext.__new__(DashboardContext)
+    ctx.calibration = live
+    ctx.calibration_path = path
+    return ctx
+
+
+def test_no_drift_when_memory_matches_disk(tmp_path):
+    cal = _cal()
+    assert _ctx_with_disk(tmp_path, cal, cal).calibration_drift() == []
+
+
+def test_an_unsaved_nudge_is_reported_as_drift(tmp_path):
+    """The silent divergence: only the mirror sees an in-memory edit.
+
+    The planner runs in a container and can read nothing but the file, so
+    an unsaved zero means the mirror and the planner describe different
+    arms — with the mirror being the half that looks correct.
+    """
+    saved = _cal()
+    live = _cal()
+    i = live.names.index("shoulder_lift")
+    live.joints[i] = live.joints[i].shifted_by(math.radians(19.0))
+
+    drift = _ctx_with_disk(tmp_path, live, saved).calibration_drift()
+    assert [n for n, _ in drift] == ["shoulder_lift"]
+    assert drift[0][1] == pytest.approx(19.0, abs=0.01)
+
+
+def test_drift_catches_a_sign_flip_that_the_zero_hides(tmp_path):
+    """A sign flip and a zero shift can cancel in the stored fields.
+
+    Comparing what the ticks are taken to *mean* catches it; comparing the
+    numbers on the dataclass would not.
+    """
+    saved = _cal()
+    live = _cal()
+    i = live.names.index("wrist_roll")
+    j = live.joints[i]
+    live.joints[i] = JointCalibration(
+        name=j.name,
+        zero_offset_ticks=j.zero_offset_ticks,
+        direction_sign=-j.direction_sign,
+        tick_min=j.tick_min,
+        tick_max=j.tick_max,
+    )
+    drift = _ctx_with_disk(tmp_path, live, saved).calibration_drift()
+    assert [n for n, _ in drift] == ["wrist_roll"]
+
+
+def test_drift_is_empty_rather_than_raising_without_a_file(tmp_path):
+    """A missing file is a different problem, with its own message."""
+    from soarm_sdk.dashboard.context import DashboardContext
+
+    ctx = DashboardContext.__new__(DashboardContext)
+    ctx.calibration = _cal()
+    ctx.calibration_path = tmp_path / "nope.json"
+    assert ctx.calibration_drift() == []
+
+
+def test_the_default_calibration_path_is_resolved_not_left_none(tmp_path):
+    """A None path made every downstream consistency check pass silently.
+
+    soarm_tamp's dashboard takes the default, so it stored None, so
+    calibration_drift() had nothing to compare and the planning gate never
+    fired — the exact divergence the gate exists to prevent.
+    """
+    from soarm_sdk.dashboard.fk import DEFAULT_CALIBRATION_PATH
+
+    import soarm_sdk.dashboard.app as app_mod
+
+    src = inspect.getsource(app_mod.DashboardApp.__init__)
+    assert "DEFAULT_CALIBRATION_PATH" in src
+    assert "self.ctx.calibration_path = calibration_path" not in src
+    assert DEFAULT_CALIBRATION_PATH.name == "calibration.json"
