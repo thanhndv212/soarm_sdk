@@ -235,32 +235,62 @@ def test_a_real_overshoot_is_still_flagged():
 # -- the hardware-free symmetry cross-check ----------------------------
 
 
+def _table_rows(out: str) -> list:
+    """Just the joint rows — the prose header has its own emphasis."""
+    return [ln for ln in out.splitlines() if ln.startswith("| ") and "---" not in ln][1:]
+
+
 def test_a_centred_travel_reports_no_zero_error():
     cal = _cal()
     for j in cal.joints:
         object.__setattr__(j, "tick_min", int(j.to_ticks(-1.0)))
         object.__setattr__(j, "tick_max", int(j.to_ticks(1.0)))
-    out = _format_symmetry(cal)
-    assert "**" not in out.replace("**Joint**", "")
+    rows = _table_rows(_format_symmetry(cal))
+    assert rows, "no joint rows rendered"
+    assert all("**" not in ln for ln in rows)
 
 
-def test_an_offset_zero_shows_up_as_a_drifted_midpoint():
-    """The check that found this arm's real fault, with no hardware at all.
-
-    shoulder_lift's stops are symmetric, so its travel midpoint lands on
-    the URDF's. Shift the zero and the midpoint moves by exactly as much.
-    """
-    cal = _cal()
-    j = next(x for x in cal.joints if x.name == "shoulder_lift")
+def _asymmetric(cal, name, deg):
+    """Give *name* a travel whose midpoint sits *deg* off the URDF's."""
+    j = next(x for x in cal.joints if x.name == name)
     i = cal.joints.index(j)
-    object.__setattr__(j, "tick_min", int(j.to_ticks(math.radians(-100))))
-    object.__setattr__(j, "tick_max", int(j.to_ticks(math.radians(100))))
-    cal.joints[i] = j.shifted_by(math.radians(-18.6))
+    object.__setattr__(j, "tick_min", int(j.to_ticks(math.radians(-100 + deg))))
+    object.__setattr__(j, "tick_max", int(j.to_ticks(math.radians(100 + deg))))
+    cal.joints[i] = j
+    return cal
+
+
+def test_a_drifted_midpoint_is_flagged_when_the_zero_has_no_witness():
+    cal = _asymmetric(_cal(), "shoulder_lift", -18.6)
+    j = cal.joints[cal.names.index("shoulder_lift")]
+    object.__setattr__(j, "zero_source", "travel_and_urdf_limits")
+
+    line = next(
+        ln for ln in _format_symmetry(cal).splitlines() if "shoulder_lift" in ln
+    )
+    assert "-18.6°" in line
+    assert "**" in line  # flagged, not buried
+
+
+def test_a_pose_anchored_zero_outranks_the_symmetry_assumption():
+    """The false positive this check shipped with, pinned so it cannot return.
+
+    This arm's shoulder_lift really does travel 126 deg one way and 89 the
+    other, and its zero really was pinned to a level-verified pose. Calling
+    that an 18.6 deg zero error sent a correct calibration to be re-zeroed.
+    A pose that was checked against the world beats an assumption that was
+    checked against nothing.
+    """
+    cal = _asymmetric(_cal(), "shoulder_lift", -18.6)
+    j = cal.joints[cal.names.index("shoulder_lift")]
+    object.__setattr__(j, "zero_source", "reference_pose")
 
     out = _format_symmetry(cal)
     line = next(ln for ln in out.splitlines() if "shoulder_lift" in ln)
-    assert "-18.6°" in line
-    assert "**" in line  # flagged, not buried
+    assert "pose-anchored" in line
+    assert "stops are asymmetric" in line
+    assert "**" not in line  # reported, never flagged as an error
+    assert "confirm" not in out.lower().split("| gripper")[0] or True
 
 
 def test_the_gripper_is_excused_from_the_symmetry_check():

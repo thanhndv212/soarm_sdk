@@ -186,29 +186,41 @@ SYMMETRY_WARN_DEG = 8.0
 
 
 def _format_symmetry(cal: Optional[RobotCalibration]) -> str:
-    """Check each zero against the symmetry of the joint's own travel.
+    """Compare each zero against the symmetry of the joint's own travel.
 
-    Needs no hardware, no reference pose and no operator: the arm's stops
-    were already measured, and the URDF already says where they should sit.
-    Express the measured travel in the calibration's frame and its midpoint
-    should land on the URDF's midpoint. Where it does not, the gap is the
-    zero error, read off without believing anything about the zero.
+    Needs no hardware and no operator: the stops were already measured and
+    the URDF already says where they should sit, so expressing the measured
+    travel in the calibration's frame and looking at its midpoint costs
+    nothing.
 
-    It is a cross-check, not a replacement for a reference pose — it assumes
-    the stops really are symmetric, which is true of this arm's pitch joints
-    and false of the gripper, whose travel is a jaw opening. Joints whose
-    measured span disagrees with the URDF are marked, because for those the
-    assumption is already shaky.
+    **This is a hypothesis, not a measurement.** It is only as good as the
+    assumption that the joint's mechanical stops are symmetric about the
+    URDF's zero, and that assumption is not free — this arm's shoulder_lift
+    travels 126 deg down and 89 deg up, genuinely asymmetric, because the
+    structure blocks it one way and not the other. Read as a finding, that
+    asymmetry says "the zero is 18.6 deg out". It is not; it is the shape of
+    the mechanism. The first version of this check said it was, and it was
+    wrong.
+
+    So a zero pinned to a verified reference pose outranks this check and is
+    reported as settled rather than flagged — the same precedence
+    :attr:`~soarm_sdk.calibration.frame.JointCalibration.suspect` already
+    applies to a span mismatch, and for the same reason: a pose that was
+    physically checked does not become doubtful because an assumption about
+    the hard stops disagrees with it. Only a zero with no such witness gets
+    flagged, and then as something to go and confirm.
     """
     if cal is None:
         return ""
     rows = [
-        "Each joint's measured travel should straddle zero the way the "
-        "URDF's limits do. Where the midpoint has drifted, that gap is the "
-        "zero error — measured without trusting the zero:",
+        "If a joint's hard stops are symmetric, its measured travel should "
+        "straddle zero the way the URDF's limits do. Where it does not, "
+        "**either** the zero is out by that much **or** the stops simply are "
+        "not symmetric — this cannot tell them apart, so it defers to any "
+        "zero that was pinned to a verified pose:",
         "",
-        "| Joint | Travel midpoint | Should be | Off by |",
-        "|---|--:|--:|--:|",
+        "| Joint | Travel midpoint | Should be | Gap | Reading |",
+        "|---|--:|--:|--:|---|",
     ]
     flagged = False
     for j in cal.joints:
@@ -217,20 +229,27 @@ def _format_symmetry(cal: Optional[RobotCalibration]) -> str:
         u_lo, u_hi = URDF_LIMITS.get(j.name, (0.0, 0.0))
         u_mid = math.degrees((u_lo + u_hi) / 2)
         err = mid - u_mid
-        note = f"{err:+.1f}°"
         if j.name == "gripper":
-            note += " *(jaw travel — not symmetric, ignore)*"
-        elif abs(err) >= SYMMETRY_WARN_DEG:
-            note = f"**{err:+.1f}°**"
+            reading = "jaw travel, never symmetric — ignore"
+        elif abs(err) < SYMMETRY_WARN_DEG:
+            reading = "symmetric, nothing to say"
+        elif j.zero_source == "reference_pose":
+            # The precedence that matters. A pose-anchored zero was checked
+            # against the world; this check was not checked against anything.
+            reading = "zero is pose-anchored — so the stops are asymmetric"
+        else:
+            reading = "**zero may be out by this much — confirm with a pose**"
             flagged = True
-        rows.append(f"| {j.name} | {mid:+.1f}° | {u_mid:+.1f}° | {note} |")
+        rows.append(
+            f"| {j.name} | {mid:+.1f}° | {u_mid:+.1f}° | {err:+.1f}° | {reading} |"
+        )
     if flagged:
         rows += [
             "",
-            "A bold figure means that joint's zero is out by roughly that "
-            "much. Confirm it against a reference pose below rather than "
-            "subtracting it here — this check assumes the hard stops are "
-            "symmetric, which a reference pose does not have to assume.",
+            "Those joints have no pose-anchored zero, so the gap is worth "
+            "chasing — but confirm it against a reference pose below rather "
+            "than subtracting it here. A pose does not have to assume "
+            "anything about the hard stops.",
         ]
     return "\n".join(rows)
 
