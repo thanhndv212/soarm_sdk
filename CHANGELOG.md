@@ -90,6 +90,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recorded `span_ratio`), so feeding its radians into the SO100 model was wrong
   by more than a radian on those joints.
 
+- **`rezero_from_pose()`** — pin joint zeros to a configuration you can verify
+  physically, instead of inferring them from travel endpoints.
+  `seed_from_travel` assumes, in its own words, that measured travel and the
+  URDF's limits "describe the same mechanical hard stops". On this arm they do
+  not: `span_ratio` runs 0.96-1.34, because the URDF's limits are conservative
+  software limits while the real travel is wider. Stretching one onto the other
+  misplaces every zero by a share of the disagreement — which is the standing
+  "URDF/travel span mismatch" that also blocks `soarm_tamp`'s `execute.py`.
+  The new path takes the zero from a held reference pose and carries measured
+  travel through untouched, so `reachable_rad` still reports the true hard
+  stops and `span_ratio` survives as the record that they disagree.
+
+  Confirmed on the arm (2026-09-13): re-zeroing against a level-verified pose
+  — upper arm vertical, forearm and gripper axis horizontal, no yaw — moved
+  `shoulder_lift` by only 3.07 degrees, while a clean `seed_from_travel`
+  re-seed wanted to move it 15.5 degrees the other way. The hand-levelled zero
+  had been right and the seeding method wrong. With that calibration and the
+  SO101 model, the 3-D mirror tracks the physical arm.
+
 ### Changed
 
 - **One launcher for the calibration CLIs.** `examples/` carried

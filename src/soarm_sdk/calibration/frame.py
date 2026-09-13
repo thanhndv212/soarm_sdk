@@ -43,7 +43,7 @@ planned trajectory until it is ``True``.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -53,6 +53,7 @@ from ..conversions import RADS_PER_TICK, TICKS_PER_RAD
 __all__ = [
     "JointCalibration",
     "RobotCalibration",
+    "rezero_from_pose",
     "seed_from_travel",
     "seed_from_lerobot",
 ]
@@ -192,6 +193,63 @@ class RobotCalibration:
         self.validated = True
         self.notes["validated_by"] = how
         self.notes["validated_at"] = datetime.now(timezone.utc).isoformat()
+
+
+def rezero_from_pose(
+    calibration: "RobotCalibration",
+    ticks: Sequence[float],
+    reference_rad: Optional[Sequence[float]] = None,
+    *,
+    source: str = "re-zeroed from a physically held reference pose",
+) -> "RobotCalibration":
+    """Recompute zero offsets from ticks measured at a *known* configuration.
+
+    :func:`seed_from_travel` infers the zero by matching the ends of measured
+    travel to the URDF's joint limits, on the stated assumption that both
+    describe the same mechanical hard stops. When they do not — when the URDF
+    limits are conservative software limits and the real travel is wider — that
+    inference is stretched across the disagreement and every zero lands off by
+    a share of it. ``span_ratio`` is what measures the disagreement; anything
+    far from 1.0 means the seeded zero cannot be trusted.
+
+    This takes the other route: hold the arm at a configuration you can verify
+    physically (a level, a straight edge, a hard stop you trust), read the
+    ticks there, and pin the zeros to that. No dependence on the URDF's limits
+    at all.
+
+    *reference_rad* defaults to all zeros — for the SO-101 that is the upper
+    arm vertical and the forearm horizontal. Measured travel is carried over
+    unchanged, so :meth:`reachable_rad` still reports the real hard stops, and
+    ``span_ratio`` is preserved as the record that they disagree with the URDF.
+
+    The result is ``validated=False``: pinning the zero to a pose you believe
+    in is not the same as confirming it, and the direction signs are inherited
+    rather than re-measured.
+    """
+    n = len(calibration.joints)
+    if len(ticks) != n:
+        raise ValueError(f"expected {n} tick values, got {len(ticks)}")
+    ref = [0.0] * n if reference_rad is None else list(reference_rad)
+    if len(ref) != n:
+        raise ValueError(f"expected {n} reference angles, got {len(ref)}")
+
+    joints = [
+        replace(
+            j,
+            # to_rad(t) = sign * (t - zero) * RADS_PER_TICK, so pinning
+            # to_rad(measured) == reference inverts to this.
+            zero_offset_ticks=t - j.direction_sign * q * TICKS_PER_RAD,
+            seed_residual_rad=0.0,
+        )
+        for j, t, q in zip(calibration.joints, ticks, ref)
+    ]
+    return RobotCalibration(
+        joints=joints,
+        arm_id=calibration.arm_id,
+        validated=False,
+        source=source,
+        notes=dict(calibration.notes),
+    )
 
 
 def seed_from_travel(
