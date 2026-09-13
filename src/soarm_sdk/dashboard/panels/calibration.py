@@ -360,6 +360,26 @@ def _build_rezero(server: Any, ctx: Any, handles: Dict[str, Any]) -> None:
                 "",
                 f"*Re-zeros:* {covers}",
             ]
+            # A reference pose is a place the arm can physically be; the
+            # URDF's limits are a conservative opinion about travel. Where
+            # they disagree the mirror renders the pose out of range and the
+            # links intersect — while the operator is holding exactly the
+            # pose they were asked for. Say so here, or it reads as the
+            # re-zero having broken something.
+            past = []
+            for name, q in pose.as_cfg().items():
+                lo, hi = URDF_LIMITS.get(name, (float("-inf"), float("inf")))
+                over = max(lo - q, q - hi, 0.0)
+                if math.degrees(over) > LIMIT_TOLERANCE_DEG:
+                    past.append(f"{name} by {math.degrees(over):.1f}°")
+            if past:
+                body += [
+                    "",
+                    f"⚠️ This pose is outside the URDF's limits ({', '.join(past)}), "
+                    "so the mirror will show the links intersecting while you hold "
+                    "it. That is expected — the model is conservative about travel. "
+                    "Re-zeroing is unaffected.",
+                ]
             if not pose.covers:
                 body.append("")
                 body.append(

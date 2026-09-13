@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from soarm_sdk.calibration.reference import (
+    FOLDED_FLAT,
     JOINT_ORDER,
     LEVEL,
     REFERENCE_POSES,
@@ -123,3 +124,52 @@ def test_q_for_reorders_by_name_not_position():
 def test_q_for_rejects_an_unknown_joint():
     with pytest.raises(KeyError):
         LEVEL.q_for(("shoulder_pan", "not_a_joint"))
+
+
+# -- the folded-flat pose ----------------------------------------------
+
+
+@needs_urdf
+def test_folded_flat_really_is_flat_and_folded(urdf):
+    """Both links level, and the forearm lying back along the upper arm."""
+    import numpy as np
+
+    cfg = FOLDED_FLAT.as_cfg()
+    urdf.update_cfg({k: float(v) for k, v in cfg.items()})
+    pts = {
+        lk: urdf.scene.graph[lk][0][:3, 3]
+        for lk in ("upper_arm_link", "lower_arm_link", "wrist_link")
+    }
+    upper = pts["lower_arm_link"] - pts["upper_arm_link"]
+    fore = pts["wrist_link"] - pts["lower_arm_link"]
+
+    # Flat: both headings on the horizontal, 180 deg apart.
+    h_up = math.degrees(math.atan2(upper[2], upper[0]))
+    h_fo = math.degrees(math.atan2(fore[2], fore[0]))
+    assert abs(h_up) == pytest.approx(180.0, abs=0.05)
+    assert h_fo == pytest.approx(0.0, abs=0.05)
+
+    # Folded: antiparallel, and the axes at the same height.
+    cos = float(
+        np.dot(upper, fore) / (np.linalg.norm(upper) * np.linalg.norm(fore))
+    )
+    assert math.degrees(math.acos(cos)) == pytest.approx(180.0, abs=0.1)
+    assert abs(pts["wrist_link"][2] - pts["upper_arm_link"][2]) < 1e-3
+
+
+@needs_urdf
+def test_folded_flat_is_outside_the_urdf_elbow_limit(urdf):
+    """Stated in the docstring, so assert it rather than trusting the prose.
+
+    The pose is reachable and valid; the URDF's limits are conservative.
+    The mirror will render it out of range, which is worth knowing before
+    it looks like the re-zero broke something.
+    """
+    elbow = FOLDED_FLAT.as_cfg()["elbow_flex"]
+    assert elbow > 1.69, "URDF ceiling is 1.69 rad"
+    assert math.degrees(elbow - 1.69) == pytest.approx(9.4, abs=0.2)
+
+
+def test_folded_flat_covers_only_the_two_pitch_joints():
+    """It says nothing about yaw, wrist pitch, roll or the jaw."""
+    assert FOLDED_FLAT.covers == ("shoulder_lift", "elbow_flex")

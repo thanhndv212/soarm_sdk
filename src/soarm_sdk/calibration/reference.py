@@ -35,7 +35,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
-__all__ = ["ReferencePose", "REFERENCE_POSES", "JOINT_ORDER", "URDF_ZERO", "LEVEL"]
+__all__ = [
+    "ReferencePose",
+    "REFERENCE_POSES",
+    "JOINT_ORDER",
+    "URDF_ZERO",
+    "LEVEL",
+    "FOLDED_FLAT",
+]
 
 #: URDF joint order. Matches ``soarm_tamp.conventions.JOINT_ORDER`` and the
 #: order every :class:`~soarm_sdk.calibration.frame.RobotCalibration` stores.
@@ -128,8 +135,45 @@ LEVEL = ReferencePose(
     covers=("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex"),
 )
 
+#: Upper arm laid flat pointing back, forearm folded flat on top of it.
+#:
+#: Solved from the URDF rather than typed: at this configuration the upper
+#: arm's heading is exactly 180 deg and the forearm's exactly 0 deg, and the
+#: two link axes come out at the same height — the forearm lies back along
+#: the upper arm. ``tests/test_reference_poses.py`` asserts all three.
+#:
+#: Better than :data:`LEVEL` for the two joints it covers, because the
+#: operator is not judging "vertical" against gravity by eye — the links
+#: resting face to face is a mechanical constraint that repeats, and only
+#: the pair's shared pitch has to be levelled.
+#:
+#: The catch, which the dashboard repeats: ``elbow_flex`` is +106.2 deg here
+#: and the URDF's ceiling is +96.8, so **the mirror renders this pose out of
+#: range and the links will visibly intersect while you hold it.** That is
+#: the model being conservative about travel, not a sign the pose is wrong —
+#: and re-zeroing does not care, since it pins ticks to angles without
+#: consulting the limits.
+FOLDED_FLAT = ReferencePose(
+    key="folded_flat",
+    label="Upper arm flat, forearm folded flat on top",
+    q=(0.0, -1.81458, 1.85311, 0.0, 0.0, 0.0),
+    setup=(
+        "Release torque. Lay the upper arm down flat pointing away from the "
+        "gripper, then fold the forearm back so it rests along the top of the "
+        "upper arm. Square the base so there is no yaw."
+    ),
+    verify_by=(
+        "The two links lying face to face is most of it — that is a hard "
+        "mechanical stop against each other, not a judgement. Then one level "
+        "across the pair to bring them both horizontal."
+    ),
+    covers=("shoulder_lift", "elbow_flex"),
+)
+
 #: Every pose the dashboard offers, keyed by :attr:`ReferencePose.key`.
-REFERENCE_POSES: Dict[str, ReferencePose] = {p.key: p for p in (LEVEL, URDF_ZERO)}
+REFERENCE_POSES: Dict[str, ReferencePose] = {
+    p.key: p for p in (FOLDED_FLAT, LEVEL, URDF_ZERO)
+}
 
 
 def get(key: str) -> Optional[ReferencePose]:

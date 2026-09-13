@@ -397,3 +397,17 @@ def test_the_default_calibration_path_is_resolved_not_left_none(tmp_path):
     assert "DEFAULT_CALIBRATION_PATH" in src
     assert "self.ctx.calibration_path = calibration_path" not in src
     assert DEFAULT_CALIBRATION_PATH.name == "calibration.json"
+
+
+def test_a_pose_past_the_urdf_limits_warns_before_you_hold_it():
+    """FOLDED_FLAT is 9.4 deg past the elbow ceiling and is still correct.
+
+    Without this the operator holds exactly the pose they were asked for
+    and watches the mirror self-intersect, which reads as the re-zero
+    having broken something.
+    """
+    from soarm_sdk.calibration.reference import FOLDED_FLAT
+    from soarm_sdk.dashboard.panels.calibration import URDF_LIMITS as LIM
+
+    elbow = FOLDED_FLAT.as_cfg()["elbow_flex"]
+    assert elbow > LIM["elbow_flex"][1], "pose should exceed the URDF ceiling"
