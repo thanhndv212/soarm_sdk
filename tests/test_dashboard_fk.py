@@ -138,3 +138,47 @@ def test_the_shipped_default_urdf_is_the_so101_revision():
 
     assert _DEFAULT_URDF.parent.name == "SO101"
     assert "so101" in _DEFAULT_URDF.name
+
+
+def test_ghost_meshes_are_translucent_hidden_and_two_sided():
+    """add_mesh_trimesh takes no opacity, so the ghost uses add_mesh_simple.
+
+    Two-sided because a translucent shell seen from inside shows its back
+    faces; culling them leaves visible holes in the arm.
+    """
+    import inspect
+
+    from soarm_sdk.dashboard import fk
+
+    src = inspect.getsource(fk.load_ghost_meshes)
+    assert "add_mesh_simple" in src
+    assert "opacity=opacity" in src
+    assert "visible=False" in src
+    assert 'side="double"' in src
+    assert 0.0 < fk.GHOST_OPACITY < 1.0
+
+
+def test_the_ghost_shares_the_solid_mirrors_geometry():
+    """Same silhouette, or overlaying one on the other proves nothing."""
+    import inspect
+
+    from soarm_sdk.dashboard import fk
+
+    for fn in (fk.load_urdf_meshes, fk.load_ghost_meshes):
+        assert "_link_geometries(urdf)" in inspect.getsource(fn)
+
+
+def test_pose_meshes_needs_no_calibration_and_no_ticks():
+    """A reference pose is already a configuration in URDF radians."""
+    import inspect
+
+    sig = inspect.signature(__import__(
+        "soarm_sdk.dashboard.fk", fromlist=["pose_meshes"]
+    ).pose_meshes)
+    assert list(sig.parameters) == ["urdf", "cfg", "handles"]
+
+
+def test_posing_without_a_urdf_is_a_no_op_not_a_crash():
+    from soarm_sdk.dashboard.fk import pose_meshes
+
+    pose_meshes(None, {"a": 0.0}, {})  # must not raise

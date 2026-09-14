@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soarm-sdk"
-version = "0.3.0"
+version = "0.4.0"
 description = "Python SDK for SO-ARM type manipulators using Feetech STS/SCS series motors"
 readme = "README.md"
 authors = [
@@ -51,6 +51,7 @@ telemetry = [
 soarm-calibrate = "soarm_sdk.cli.calibrate:main"
 soarm-dashboard = "soarm_sdk.cli.dashboard:main"
 soarm-dashboard-setup = "soarm_sdk.cli.dashboard:main_setup"
+soarm-dashboard-calibration = "soarm_sdk.cli.dashboard:main_calibration"
 soarm-seed-calibration = "soarm_sdk.calibration.seed:main"
 soarm-calibrate-rom = "soarm_sdk.calibration.sweep_cli:main"
 

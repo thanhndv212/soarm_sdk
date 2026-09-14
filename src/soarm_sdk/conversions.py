@@ -20,6 +20,15 @@ the robot's kinematic convention (increasing joint angle).
 
   **These defaults must be verified against the physical robot.**
   Flip individual signs if a joint moves in the wrong direction.
+
+  Index 4 (wrist_roll, servo ID 5) is -1 here, not +1: a physical
+  direction-sign check on this hardware (2026-09-12, arm ``thanh_arm``)
+  found it turning opposite the URDF's convention while every other checked
+  joint matched at +1. Kept in sync with
+  ``soarm_sdk.calibration.frame.DEFAULT_DIRECTION_SIGN_OVERRIDES`` and
+  ``configs/so101.yaml``'s ``hardware.direction_signs`` — three copies of
+  the same "no info supplied" assumption, and this workspace has a history
+  of exactly this kind of convention drifting apart silently.
 """
 
 from __future__ import annotations
@@ -47,7 +56,7 @@ RADS_PER_TICK: float = (2.0 * math.pi) / TICKS_PER_REV
 # +1 : positive radian = increasing raw tick value.
 # -1 : positive radian = decreasing raw tick value (mechanically inverted).
 # Verify by commanding +0.1 rad on each joint and confirming physical motion.
-SOARM100_DIRECTION_SIGNS: List[int] = [1, 1, 1, 1, 1, 1]
+SOARM100_DIRECTION_SIGNS: List[int] = [1, 1, 1, 1, -1, 1]  # index 4 = wrist_roll
 
 # ---------------------------------------------------------------------------
 # Scalar helpers

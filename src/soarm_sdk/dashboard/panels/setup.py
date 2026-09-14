@@ -12,6 +12,7 @@ ready to hand to :meth:`~soarm_sdk.dashboard.app.DashboardApp.register`.
 from __future__ import annotations
 
 import json
+import math
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -30,7 +31,7 @@ from ... import (
     STS_MODE,
     STS_TORQUE_ENABLE,
     COMM_SUCCESS,
-    discover_servos,
+    scan_servos,
     get_available_ports,
     read_servo_diagnostics,
     run_calibration,
@@ -38,6 +39,7 @@ from ... import (
     write2,
 )
 from ...protocol.registers import STS_OFS_L
+from ..fk import SOARM100_JOINT_NAMES
 from ..app import Panel
 from ..context import DashboardContext
 
@@ -133,7 +135,16 @@ def _build_startup(server: Any, ctx: DashboardContext) -> None:
         scan_md.content = "*Scanning…*"
         try:
             ids = ctx.parse_ids(scan_range_h.value)
-            found = discover_servos(ctx.device_h.value, int(ctx.baud_h.value), ids)
+            # Through ctx.bus(), never discover_servos(): in streaming mode
+            # the interface owns the port and every other control here
+            # borrows its handle. Scan was the one caller left opening its
+            # own PortHandler on the same device — and on macOS a second
+            # open of a /dev/cu.* node succeeds rather than failing, so the
+            # ping went out on a shared UART and the telemetry thread ate
+            # the reply. Nothing errored; the scan just found nothing, which
+            # reads exactly like an arm that is powered off.
+            with ctx.bus() as srv:
+                found = scan_servos(srv, ids)
             if found:
                 lines = ["| ID | Status |", "|----|--------|"]
                 for sid in sorted(found):
@@ -228,11 +239,34 @@ def _build_homing(
     server: Any,
     ctx: DashboardContext,
     fk_update_fn: Optional[Callable[[Dict[int, int]], None]] = None,
+    *,
+    heading: bool = True,
+    on_endpoints: Optional[Callable[[Dict[str, tuple], bool], None]] = None,
+    handles: Optional[Dict[str, Any]] = None,
 ) -> None:
-    server.gui.add_markdown("## Homing Wizard")
-    server.gui.add_markdown(
-        "Calibrate servo midpoints via automatic motor sweep or manual hand movement."
-    )
+    """Build the ROM-measurement controls.
+
+    ``heading`` renders the standalone "Homing Wizard" title. The Calibration
+    tab embeds these controls inside its own step folder and passes
+    ``heading=False``: a second top-level title nested there reads as a
+    different tool rather than as that step's contents.
+
+    ``on_endpoints(by_joint_name, simulated)`` is called whenever a complete
+    set of travel endpoints is produced, by either mode. Without it these
+    controls write only servo EEPROM and ``soarm100_rom.json`` — which is why
+    measuring travel here could never satisfy the calibration's own ROM
+    acceptance row, whose evidence lives in ``rom_endpoint_samples`` and was
+    previously written by nothing but ``soarm-calibrate-rom``.
+
+    ``handles``, if given, receives ``"homing_tick"``: a ``(ctx) -> None``
+    the caller should invoke from its panel tick to refresh the live readout.
+    """
+    if heading:
+        server.gui.add_markdown("## Homing Wizard")
+        server.gui.add_markdown(
+            "Calibrate servo midpoints via automatic motor sweep or manual "
+            "hand movement."
+        )
 
     _OPT_AUTO = "Automatic — motor sweep"
     _OPT_MAN = "Manual — move by hand"
@@ -272,19 +306,32 @@ def _build_homing(
     sweep_btn = server.gui.add_button("Sweep All Joints", color="green")
 
     man_header_md = server.gui.add_markdown(
-        "Disable torque then move each joint by hand to its limits."
+        "Disable torque then move each joint by hand to its limits. The table "
+        "below is live — push the joint until the number stops changing, then "
+        "record that end."
     )
     torque_off_btn = server.gui.add_button("Disable Torque on Selected Joints")
-    man_status_md = server.gui.add_markdown("*No manual positions recorded yet.*")
-    man_compute_btn = server.gui.add_button("Compute from Recorded Limits", color="blue")
+    man_live_md = server.gui.add_markdown("*Waiting for a servo reading…*")
+    man_status_md = server.gui.add_markdown("")
     man_positions: Dict[int, Dict[str, Optional[int]]] = {
         sid: {"min": None, "max": None} for sid in ctx.joint_ids
     }
+    # One label plus its own three buttons, per joint — in that order, six
+    # times — rather than one combined min/max table followed by eighteen
+    # undifferentiated buttons below it. The table already existed
+    # (man_live_md carries the same numbers, live); what was missing was
+    # the buttons sitting next to the row they act on instead of several
+    # screens of buttons away from it, identifiable only by an id number.
+    man_row_mds: Dict[int, Any] = {}
     man_min_btns: Dict[int, Any] = {}
     man_max_btns: Dict[int, Any] = {}
-    for sid in ctx.joint_ids:
+    man_reset_btns: Dict[int, Any] = {}
+    for sid, name in zip(ctx.joint_ids, SOARM100_JOINT_NAMES):
+        man_row_mds[sid] = server.gui.add_markdown(f"**J{sid} {name}** — min —, max —")
         man_min_btns[sid] = server.gui.add_button(f"Record Min J{sid}")
         man_max_btns[sid] = server.gui.add_button(f"Record Max J{sid}")
+        man_reset_btns[sid] = server.gui.add_button(f"Reset J{sid}")
+    man_compute_btn = server.gui.add_button("Compute from Recorded Limits", color="blue")
 
     apply_btn = server.gui.add_button("Apply: Write Offsets + Limits to EEPROM", color="blue")
     save_btn = server.gui.add_button("Save Config (soarm100_rom.json)")
@@ -294,10 +341,13 @@ def _build_homing(
     _man_controls = [
         man_header_md,
         torque_off_btn,
+        man_live_md,
         man_status_md,
         man_compute_btn,
+        *man_row_mds.values(),
         *man_min_btns.values(),
         *man_max_btns.values(),
+        *man_reset_btns.values(),
     ]
 
     def _apply_visibility(selected: str) -> None:
@@ -315,16 +365,73 @@ def _build_homing(
 
     rom_results: Dict[int, dict] = {}
 
-    def _update_man_status() -> None:
-        lines = ["| Joint | Min | Max |", "|-------|-----|-----|"]
-        for sid in ctx.joint_ids:
+    def _publish_endpoints(simulated: bool) -> None:
+        """Hand a complete endpoint set to the caller, keyed by joint name.
+
+        ``rom_results`` is keyed by servo id and exists to drive EEPROM
+        writes; the calibration's evidence is keyed by joint name. Both
+        modes funnel through here so neither can quietly skip recording.
+        """
+        if on_endpoints is None:
+            return
+        by_name: Dict[str, tuple] = {}
+        for sid, name in zip(ctx.joint_ids, SOARM100_JOINT_NAMES):
+            d = rom_results.get(sid)
+            if d is None:
+                continue
+            lo, hi = int(d["pos_min"]), int(d["pos_max"])
+            by_name[name] = (min(lo, hi), max(lo, hi))
+        if by_name:
+            on_endpoints(by_name, simulated)
+
+    def _tick(tick_ctx: Any) -> None:
+        """Live ticks per joint, beside whatever has been recorded so far.
+
+        Recording a hard stop by hand means pushing until the number stops
+        moving — which you cannot do if the number is not on screen. Without
+        this the operator pressed Record and hoped.
+        """
+        with tick_ctx.lock:
+            positions = dict(tick_ctx.state.positions)
+        cal = getattr(tick_ctx, "calibration", None)
+        by_name = {j.name: j for j in cal.joints} if cal is not None else {}
+        lines = [
+            "| Joint | Live | Angle | Recorded min | Recorded max | Span |",
+            "|---|--:|--:|--:|--:|--:|",
+        ]
+        for sid, name in zip(tick_ctx.joint_ids, SOARM100_JOINT_NAMES):
+            ticks = positions.get(sid)
+            joint = by_name.get(name)
+            ang = (
+                f"{math.degrees(joint.to_rad(ticks)):+.1f}°"
+                if joint is not None and ticks is not None
+                else "—"
+            )
+            mn = man_positions.get(sid, {}).get("min")
+            mx = man_positions.get(sid, {}).get("max")
+            span = f"{abs(mx - mn)}" if mn is not None and mx is not None else "—"
+            live = f"**{ticks}**" if ticks is not None else "*no reading*"
+            lines.append(
+                f"| J{sid} {name} | {live} | {ang} "
+                f"| {mn if mn is not None else '—'} "
+                f"| {mx if mx is not None else '—'} | {span} |"
+            )
+        man_live_md.content = "\n".join(lines)
+
+    if handles is not None:
+        handles["homing_tick"] = _tick
+
+    def _update_man_rows() -> None:
+        """Refresh each joint's own label — the confirmation for that joint's
+        buttons lives right there, not in a shared status line elsewhere."""
+        for sid, name in zip(ctx.joint_ids, SOARM100_JOINT_NAMES):
             mn = man_positions[sid]["min"]
             mx = man_positions[sid]["max"]
-            lines.append(
-                f"| J{sid} | {mn if mn is not None else '—'}"
-                f" | {mx if mx is not None else '—'} |"
+            man_row_mds[sid].content = (
+                f"**J{sid} {name}** — "
+                f"min {mn if mn is not None else '—'}, "
+                f"max {mx if mx is not None else '—'}"
             )
-        man_status_md.content = "\n".join(lines)
 
     @sweep_btn.on_click
     def _do_sweep(_: Any) -> None:
@@ -374,6 +481,7 @@ def _build_homing(
             for _sid, d in res.items():
                 d["method"] = method
             rom_results.update(res)
+            _publish_endpoints(simulate)
             suffix = (
                 " (simulated — Apply will still write to real EEPROM if connected)"
                 if simulate
@@ -491,7 +599,7 @@ def _build_homing(
                     p, r, _rest = srv.ReadPos(sid_cap)
                 if r == COMM_SUCCESS:
                     man_positions[sid_cap]["min"] = p
-                    _update_man_status()
+                    _update_man_rows()
             except Exception as exc:
                 man_status_md.content = f"**Error**: {exc}"
 
@@ -502,9 +610,19 @@ def _build_homing(
                     p, r, _rest = srv.ReadPos(sid_cap)
                 if r == COMM_SUCCESS:
                     man_positions[sid_cap]["max"] = p
-                    _update_man_status()
+                    _update_man_rows()
             except Exception as exc:
                 man_status_md.content = f"**Error**: {exc}"
+
+        @man_reset_btns[sid_cap].on_click
+        def _(_: Any) -> None:
+            # Clears both ends for this joint only — a bad Record Min does
+            # not force discarding a good Record Max on the same joint, and
+            # this touches nothing on any other joint's row.
+            man_positions[sid_cap]["min"] = None
+            man_positions[sid_cap]["max"] = None
+            man_status_md.content = f"J{sid_cap}: recorded limits cleared."
+            _update_man_rows()
 
     for sid in ctx.joint_ids:
         _make_man_handlers(sid)
@@ -529,6 +647,7 @@ def _build_homing(
             }
             computed.append(sid)
         if computed:
+            _publish_endpoints(False)
             log_md.content = f"Computed from manual limits for J{computed}. Press Apply to write."
         else:
             log_md.content = "**Error**: Record both min and max for at least one joint."

@@ -38,7 +38,7 @@ import argparse
 import sys
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Sequence, Tuple
+from typing import Any, Dict, Generator, List, Optional, Sequence, Tuple
 
 from ..bus.discovery import discover_servos, list_ports, read_diagnostics
 from ..protocol.port_handler import PortHandler
@@ -438,6 +438,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         cal = fresh
         cal.notes["sweep"] = sweep_notes
         cal.notes["sweep_warnings"] = {k: v for k, v in warnings.items() if v}
+        prior = RobotCalibration.load(out) if out.exists() else None
+        _append_rom_endpoint_samples(cal, prior, sweep_notes, args.dry_run)
 
     if pre_state:
         cal.notes["servo_state_before_sweep"] = pre_state
@@ -462,6 +464,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     print()
     _print_report(cal, saved)
     return 0
+
+
+def _append_rom_endpoint_samples(
+    calibration: RobotCalibration,
+    prior: Optional[RobotCalibration],
+    sweep_notes: Dict[str, Any],
+    dry_run: bool,
+) -> None:
+    """Append one complete endpoint observation per joint to calibration evidence."""
+    old = prior.notes.get("rom_endpoint_samples", {}) if prior else {}
+    samples = {
+        name: list(entries)
+        for name, entries in old.items()
+        if isinstance(entries, list)
+    } if isinstance(old, dict) else {}
+    for name, measurement in sweep_notes.items():
+        samples.setdefault(name, []).append(
+            {
+                "min": measurement["pos_min"],
+                "max": measurement["pos_max"],
+                "simulated": dry_run,
+            }
+        )
+    calibration.notes["rom_endpoint_samples"] = samples
 
 
 def _merge_into_existing(
@@ -489,6 +515,10 @@ def _merge_into_existing(
 
     notes = dict(prior.notes) if prior else {}
     notes["sweep"] = {**notes.get("sweep", {}), **sweep_notes}
+    _append_rom_endpoint_samples(
+        fresh, prior, sweep_notes, args.dry_run
+    )
+    notes["rom_endpoint_samples"] = fresh.notes["rom_endpoint_samples"]
     # Earlier versions stored a flat list, which lost warnings on a partial
     # re-sweep — that is why this is a dict now. Drop a list we find rather
     # than trying to attribute its entries back to joints.

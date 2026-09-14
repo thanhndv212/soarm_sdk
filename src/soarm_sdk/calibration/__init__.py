@@ -26,6 +26,7 @@ from .frame import (
 )
 from .reference import REFERENCE_POSES, ReferencePose
 from .rom_sweep import run_rom_sweep, simulate_rom_sweep
+from .pipeline import AcceptanceTolerances, CalibrationPipeline, CalibrationReport
 
 __all__ = [
     "JointCalibration",
@@ -37,4 +38,7 @@ __all__ = [
     "ReferencePose",
     "run_rom_sweep",
     "simulate_rom_sweep",
+    "AcceptanceTolerances",
+    "CalibrationPipeline",
+    "CalibrationReport",
 ]

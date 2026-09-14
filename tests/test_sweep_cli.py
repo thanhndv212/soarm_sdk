@@ -42,11 +42,17 @@ def test_joint_order_follows_the_config_not_the_sweep(tmp_path):
 
 
 def test_result_is_never_written_validated(tmp_path):
-    """The direction signs are assumed, so nothing here may claim otherwise."""
+    """The direction signs are assumed, so nothing here may claim otherwise.
+
+    wrist_roll is assumed -1, not +1 — see DEFAULT_DIRECTION_SIGN_OVERRIDES —
+    but "assumed" either way; only a physical check may set validated=True.
+    """
     _, out = _run(tmp_path)
     cal = RobotCalibration.load(out)
     assert cal.validated is False
-    assert all(j.direction_sign == 1 for j in cal.joints)
+    by_name = {j.name: j.direction_sign for j in cal.joints}
+    assert by_name["wrist_roll"] == -1
+    assert all(s == 1 for n, s in by_name.items() if n != "wrist_roll")
 
 
 def test_measured_travel_is_recorded_in_notes(tmp_path):

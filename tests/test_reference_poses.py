@@ -55,40 +55,86 @@ def urdf():
 def test_level_pose_really_is_level(urdf):
     """Upper arm vertical, forearm horizontal — the claim in LEVEL.setup."""
     pitches = member_pitches(urdf, LEVEL.as_cfg())
-    assert pitches["upper_arm"] == pytest.approx(90.0, abs=0.05)
+    assert pitches["upper_arm"] == pytest.approx(90.0, abs=0.15)
     assert pitches["forearm"] == pytest.approx(0.0, abs=0.05)
 
 
 @needs_urdf
-def test_urdf_zero_is_not_the_level_pose(urdf):
-    """The bug, pinned so it cannot come back as a 'simplification'.
+def test_urdf_zero_is_the_level_pose(urdf):
+    """The correction to the correction.
 
-    Someone reading ``rezero_from_pose``'s old docstring would conclude
-    these two are the same pose and drop LEVEL's awkward constants. They
-    are 14 deg and 16 deg apart.
+    This file used to assert the opposite — that the two were 14 deg and
+    16 deg apart — on the strength of ``MEMBERS`` measuring each member as
+    the chord between two joint-frame origins. Those origins sit off the
+    upper arm's long axis, so the chord is not the line a level lies along.
+    Measured along the body, the URDF's own zero *is* upper arm vertical
+    and forearm level, exactly as ``rezero_from_pose`` said before anyone
+    "fixed" it.
     """
+    assert LEVEL.q == URDF_ZERO.q
     zero = member_pitches(urdf, URDF_ZERO.as_cfg())
-    assert zero["upper_arm"] == pytest.approx(76.03, abs=0.05)
-    assert zero["forearm"] == pytest.approx(2.21, abs=0.05)
-
-    level = member_pitches(urdf, LEVEL.as_cfg())
-    assert abs(level["upper_arm"] - zero["upper_arm"]) > 10.0
-    assert abs(level["forearm"] - zero["forearm"]) > 1.0
+    assert zero["upper_arm"] == pytest.approx(90.0, abs=0.15)
+    assert zero["forearm"] == pytest.approx(0.0, abs=0.05)
 
 
 @needs_urdf
-def test_level_pose_error_if_taken_as_urdf_zero(urdf):
-    """The size of the mistake, in the units the calibration is written in.
+def test_the_chord_and_the_body_are_not_the_same_line(urdf):
+    """Why every pose here was wrong, pinned so it cannot come back.
 
-    Re-zeroing against all-zeros while the arm is physically in LEVEL puts
-    shoulder_lift and elbow_flex out by these amounts, in *opposite*
-    directions — which is why the symptom is the two links folding into
-    each other rather than the whole arm being rotated.
+    Keep both numbers in one place: the chord between joint origins reads
+    +76 deg at the URDF zero, the member body reads +90 deg, and the 14 deg
+    between them is the whole bug. Anyone reverting ``MEMBERS`` to the
+    origin-to-origin form fails here.
     """
-    cfg = LEVEL.as_cfg()
-    assert math.degrees(cfg["shoulder_lift"]) == pytest.approx(-13.97, abs=0.05)
-    assert math.degrees(cfg["elbow_flex"]) == pytest.approx(16.17, abs=0.05)
-    assert cfg["shoulder_lift"] * cfg["elbow_flex"] < 0
+    import numpy as np
+
+    urdf.update_cfg({k: 0.0 for k in JOINT_ORDER})
+    g = urdf.scene.graph
+    a = g["upper_arm_link"][0][:3, 3]
+    b = g["lower_arm_link"][0][:3, 3]
+    chord = b - a
+    chord_pitch = math.degrees(math.asin(chord[2] / float(np.linalg.norm(chord))))
+
+    body_pitch = member_pitches(urdf, {k: 0.0 for k in JOINT_ORDER})["upper_arm"]
+
+    assert chord_pitch == pytest.approx(76.03, abs=0.05)
+    assert body_pitch == pytest.approx(90.0, abs=0.15)
+    assert abs(body_pitch - chord_pitch) == pytest.approx(13.9, abs=0.2)
+
+
+@needs_urdf
+def test_the_baked_body_axes_still_match_the_meshes(urdf):
+    """MEMBERS carries measured constants; re-derive them from the URDF.
+
+    Taken from each shell mesh's oriented bounding box. PCA is not usable
+    here — the wrist shell is nearly cubic and its principal axis comes out
+    16 deg from the body.
+    """
+    import numpy as np
+
+    from soarm_sdk.kinematics.urdf_fk import MEMBERS
+
+    urdf.update_cfg({k: 0.0 for k in JOINT_ORDER})
+    g = urdf.scene.graph
+    shells = {
+        "upper_arm_link": "upper_arm_so101_v1",
+        "lower_arm_link": "under_arm_so101_v1",
+        "wrist_link": "wrist_roll_pitch_so101_v2",
+    }
+    for _name, link, baked in MEMBERS:
+        T_link, _ = g[link]
+        node = next(n for n in g.nodes_geometry if shells[link] in n)
+        T_node, gname = g[node]
+        obb = urdf.scene.geometry[gname].bounding_box_oriented
+        R = np.asarray(obb.primitive.transform)[:3, :3]
+        axis = R[:, int(np.argmax(np.asarray(obb.primitive.extents)))]
+        world = T_node[:3, :3] @ axis
+        world /= np.linalg.norm(world)
+        derived = T_link[:3, :3].T @ world
+        baked_v = np.asarray(baked)
+        # Sign is arbitrary out of an OBB; compare the line, not the ray.
+        cos = abs(float(np.dot(derived, baked_v)))
+        assert math.degrees(math.acos(min(cos, 1.0))) < 0.5, link
 
 
 # -- structural invariants, no URDF needed -----------------------------
@@ -131,43 +177,38 @@ def test_q_for_rejects_an_unknown_joint():
 
 @needs_urdf
 def test_folded_flat_really_is_flat_and_folded(urdf):
-    """Both links level, and the forearm lying back along the upper arm."""
-    import numpy as np
+    """Both member bodies level, and parallel to each other.
 
-    cfg = FOLDED_FLAT.as_cfg()
-    urdf.update_cfg({k: float(v) for k, v in cfg.items()})
-    pts = {
-        lk: urdf.scene.graph[lk][0][:3, 3]
-        for lk in ("upper_arm_link", "lower_arm_link", "wrist_link")
-    }
-    upper = pts["lower_arm_link"] - pts["upper_arm_link"]
-    fore = pts["wrist_link"] - pts["lower_arm_link"]
-
-    # Flat: both headings on the horizontal, 180 deg apart.
-    h_up = math.degrees(math.atan2(upper[2], upper[0]))
-    h_fo = math.degrees(math.atan2(fore[2], fore[0]))
-    assert abs(h_up) == pytest.approx(180.0, abs=0.05)
-    assert h_fo == pytest.approx(0.0, abs=0.05)
-
-    # Folded: antiparallel, and the axes at the same height.
-    cos = float(
-        np.dot(upper, fore) / (np.linalg.norm(upper) * np.linalg.norm(fore))
-    )
-    assert math.degrees(math.acos(cos)) == pytest.approx(180.0, abs=0.1)
-    assert abs(pts["wrist_link"][2] - pts["upper_arm_link"][2]) < 1e-3
-
-
-@needs_urdf
-def test_folded_flat_is_outside_the_urdf_elbow_limit(urdf):
-    """Stated in the docstring, so assert it rather than trusting the prose.
-
-    The pose is reachable and valid; the URDF's limits are conservative.
-    The mirror will render it out of range, which is worth knowing before
-    it looks like the re-zero broke something.
+    Measured along the bodies, not the joint-origin chords: the previous
+    values levelled the chords and left the upper arm visibly sloped, which
+    is what the operator sees and what a level on it reads.
     """
-    elbow = FOLDED_FLAT.as_cfg()["elbow_flex"]
-    assert elbow > 1.69, "URDF ceiling is 1.69 rad"
-    assert math.degrees(elbow - 1.69) == pytest.approx(9.4, abs=0.2)
+    pitches = member_pitches(urdf, FOLDED_FLAT.as_cfg())
+    assert pitches["upper_arm"] == pytest.approx(0.0, abs=0.05)
+    assert pitches["forearm"] == pytest.approx(0.0, abs=0.05)
+    # Both level means both parallel, which is what "folded flat" claims.
+    assert abs(pitches["upper_arm"] - pitches["forearm"]) < 0.05
+
+
+def test_folded_flat_is_a_right_angle_at_each_joint():
+    """Solved, not typed — and it landed exactly on -pi/2, +pi/2.
+
+    A good sign the body axes are the right line to have solved against.
+    The chord-derived values were -1.81458 and +1.85311.
+    """
+    cfg = FOLDED_FLAT.as_cfg()
+    assert cfg["shoulder_lift"] == pytest.approx(-math.pi / 2, abs=1e-5)
+    assert cfg["elbow_flex"] == pytest.approx(math.pi / 2, abs=1e-5)
+
+
+def test_folded_flat_is_now_inside_the_urdf_limits():
+    """It used to overshoot the elbow ceiling by 9.4 deg and self-intersect.
+
+    That was a symptom of the wrong solve, not of conservative limits.
+    """
+    cfg = FOLDED_FLAT.as_cfg()
+    assert abs(cfg["elbow_flex"]) < 1.69
+    assert abs(cfg["shoulder_lift"]) < 1.74533
 
 
 def test_folded_flat_covers_only_the_two_pitch_joints():

@@ -84,3 +84,34 @@ def test_joint_conversions_respect_custom_zero_offsets():
     zeros = [2000, 2048, 2100]
     ticks = [2000, 2048, 2100]
     assert joint_ticks_to_radians(ticks, zero_offsets=zeros) == [0.0, 0.0, 0.0]
+
+
+def test_wrist_roll_default_sign_matches_the_calibration_default():
+    """Three copies of "no info supplied -> assume this sign" exist —
+    SOARM100_DIRECTION_SIGNS, so101.yaml's hardware.direction_signs, and
+    seed_from_travel's DEFAULT_DIRECTION_SIGN_OVERRIDES. This workspace has
+    a documented history of exactly these conventions drifting apart
+    silently; this test is the tripwire."""
+    from soarm_sdk.calibration.frame import DEFAULT_DIRECTION_SIGN_OVERRIDES
+    from soarm_sdk.conversions import SOARM100_DIRECTION_SIGNS
+    from soarm_sdk.robot.base import load_robot_config
+
+    joint_names = load_robot_config("so101")["joint_names"]
+    wr = joint_names.index("wrist_roll")
+
+    assert SOARM100_DIRECTION_SIGNS[wr] == -1
+    assert load_robot_config("so101")["hardware"]["direction_signs"][wr] == -1
+    assert DEFAULT_DIRECTION_SIGN_OVERRIDES["wrist_roll"] == -1
+
+
+def test_every_other_joint_is_still_positive_everywhere():
+    from soarm_sdk.conversions import SOARM100_DIRECTION_SIGNS
+    from soarm_sdk.robot.base import load_robot_config
+
+    joint_names = load_robot_config("so101")["joint_names"]
+    signs_yaml = load_robot_config("so101")["hardware"]["direction_signs"]
+    for i, name in enumerate(joint_names):
+        if name == "wrist_roll":
+            continue
+        assert SOARM100_DIRECTION_SIGNS[i] == 1, name
+        assert signs_yaml[i] == 1, name

@@ -30,8 +30,16 @@ __all__ = [
     "SOARM100_JOINT_NAMES",
     "URDF_AVAILABLE",
     "load_urdf_meshes",
+    "load_ghost_meshes",
+    "pose_meshes",
     "update_fk",
 ]
+
+#: The reference-pose ghost: a translucent copy of the arm, posed where the
+#: operator is being asked to put the real one. Distinct in hue from the
+#: solid mirror so the two never read as one object when they overlap.
+GHOST_COLOR = (90, 170, 255)
+GHOST_OPACITY = 0.28
 
 SOARM100_IDS: List[int] = [1, 2, 3, 4, 5, 6]
 SOARM100_JOINT_NAMES: List[str] = [
@@ -63,20 +71,10 @@ def load_urdf_meshes(
         print(f"[soarm_sdk.dashboard] URDF not found or failed to load: {urdf_path}")
         return None, {}
 
-    scene = urdf.scene
     mesh_handles: Dict[str, Any] = {}
     transforms = link_transforms(urdf, {})
 
-    for node_name in scene.graph.nodes_geometry:
-        _, geom_name = scene.graph[node_name]
-        geom = scene.geometry.get(geom_name)
-        if geom is None:
-            continue
-        if isinstance(geom, trimesh.Scene):
-            geom = geom.dump(concatenate=True)
-        if not isinstance(geom, trimesh.Trimesh):
-            continue
-
+    for node_name, geom in _link_geometries(urdf):
         wxyz, position = transforms.get(node_name, (None, None))
         if wxyz is None:
             continue
@@ -89,6 +87,77 @@ def load_urdf_meshes(
         mesh_handles[node_name] = handle
 
     return urdf, mesh_handles
+
+
+def _link_geometries(urdf: Any):
+    """Yield ``(scene-graph node name, Trimesh)`` for every renderable link."""
+    scene = urdf.scene
+    for node_name in scene.graph.nodes_geometry:
+        _, geom_name = scene.graph[node_name]
+        geom = scene.geometry.get(geom_name)
+        if geom is None:
+            continue
+        if isinstance(geom, trimesh.Scene):
+            geom = geom.dump(concatenate=True)
+        if not isinstance(geom, trimesh.Trimesh):
+            continue
+        yield node_name, geom
+
+
+def load_ghost_meshes(
+    server: Any,
+    urdf: Any,
+    *,
+    color: Tuple[int, int, int] = GHOST_COLOR,
+    opacity: float = GHOST_OPACITY,
+) -> Dict[str, Any]:
+    """Register a translucent copy of the arm, hidden, under ``/ghost``.
+
+    The target the operator is aiming the *real* arm at. A reference pose
+    was previously only prose — "fold the arm flat against itself" — which
+    leaves the operator to guess how flat, and a zero pinned to a guessed
+    pose is a guessed zero. Showing the pose in the same scene, at the same
+    scale, makes it something to match rather than interpret.
+
+    Built with ``add_mesh_simple`` rather than ``add_mesh_trimesh`` because
+    only the former takes ``opacity``; the link geometry is shared, so the
+    silhouette is identical to the solid mirror.
+    """
+    if urdf is None:
+        return {}
+    handles: Dict[str, Any] = {}
+    for node_name, geom in _link_geometries(urdf):
+        handles[node_name] = server.scene.add_mesh_simple(
+            name=f"/ghost/{node_name}",
+            vertices=geom.vertices,
+            faces=geom.faces,
+            color=color,
+            opacity=opacity,
+            # Two-sided: a translucent shell viewed from inside shows its
+            # back faces, and culling them leaves visible holes in the arm.
+            side="double",
+            cast_shadow=False,
+            receive_shadow=False,
+            visible=False,
+        )
+    return handles
+
+
+def pose_meshes(urdf: Any, cfg: Dict[str, float], handles: Dict[str, Any]) -> None:
+    """Pose a mesh handle set at an explicit configuration, in URDF radians.
+
+    No calibration and no servo readings: *cfg* is the configuration itself,
+    which is what a reference pose already is.
+    """
+    if urdf is None or not handles:
+        return
+    transforms = link_transforms(urdf, cfg)
+    for node_name, handle in handles.items():
+        wxyz, position = transforms.get(node_name, (None, None))
+        if wxyz is None:
+            continue
+        handle.wxyz = tuple(wxyz)
+        handle.position = tuple(position)
 
 
 def load_calibration(

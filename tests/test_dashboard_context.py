@@ -249,3 +249,28 @@ def test_connect_failure_is_reported_not_raised(monkeypatch):
     with ctx.lock:
         assert ctx.state.connected is False
         assert "cannot open port" in ctx.state.poll_error
+
+
+def test_every_startup_control_borrows_the_bus_rather_than_reopening_it():
+    """Scan was the one control that opened its own port, and it failed mute.
+
+    ``ctx.bus()`` exists so that controls keep working in streaming mode,
+    where the interface owns the serial port. Scan called ``discover_servos``
+    instead, which builds its own ``PortHandler`` on the same device — and on
+    macOS a second open of a ``/dev/cu.*`` node *succeeds*, so the ping went
+    out on a shared UART and the telemetry thread consumed the reply. No
+    exception, no error message: the scan simply reported no servos, which is
+    indistinguishable from an unpowered arm.
+    """
+    import inspect
+    import re
+
+    from soarm_sdk.dashboard.panels import setup
+
+    src = inspect.getsource(setup._build_startup)
+    # Comments explain the trap by name, so match the call, not the prose.
+    code = re.sub(r"#.*", "", src)
+    assert "discover_servos(" not in code, "scan must not open its own port"
+    assert "scan_servos(" in code
+    # Each of the three bus-touching controls goes through the borrow.
+    assert src.count("with ctx.bus() as srv:") == 3

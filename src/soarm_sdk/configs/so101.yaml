@@ -66,7 +66,12 @@ gripper:
 hardware:
   servo_ids: [1, 2, 3, 4, 5, 6]
   zero_offsets: [2048, 2048, 2048, 2048, 2048, 2048]
-  direction_signs: [1, 1, 1, 1, 1, 1]
+  # wrist_roll (5th) is -1, not +1: a physical direction-sign check on this
+  # hardware (2026-09-12, arm thanh_arm) found it turning opposite the
+  # URDF's convention while every other checked joint matched at +1. Kept in
+  # sync with soarm_sdk.conversions.SOARM100_DIRECTION_SIGNS and
+  # calibration.frame.DEFAULT_DIRECTION_SIGN_OVERRIDES.
+  direction_signs: [1, 1, 1, 1, -1, 1]
   default_speed: 300   # ticks/s
   default_acc: 50      # acceleration units
   state_freq: 100      # Hz — bus read loop

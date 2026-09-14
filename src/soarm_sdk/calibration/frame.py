@@ -116,6 +116,52 @@ class JointCalibration:
             zero_source="manual_nudge",
         )
 
+    def with_direction_flipped(self) -> "JointCalibration":
+        """Copy of this joint whose reported angle increases the other way.
+
+        The fix when the model turns *opposite* to the member: no zero can
+        repair a wrong sign, because the sign is not an offset.
+
+        The zero *tick* is kept — which tick reads zero does not move — but
+        any zero solved for under the old sign is now wrong:
+        :func:`rezero_from_pose` computes ``zero = ticks - sign * rad``, so
+        the sign is folded into it. The provenance is therefore dropped
+        rather than carried, and the joint has to be re-pinned against a
+        pose before the calibration can be accepted again.
+        """
+        return replace(
+            self,
+            direction_sign=-self.direction_sign,
+            zero_source="manual_sign_flip",
+        )
+
+    def with_travel(self, tick_min: int, tick_max: int) -> "JointCalibration":
+        """Copy carrying freshly measured hard stops.
+
+        The travel is a fact about the mechanism and independent of the zero,
+        so nothing else moves: the same ticks still mean the same angles.
+        """
+        lo, hi = int(min(tick_min, tick_max)), int(max(tick_min, tick_max))
+        return replace(self, tick_min=lo, tick_max=hi)
+
+    def with_claim_withdrawn(self) -> "JointCalibration":
+        """Copy whose zero stops claiming a reference-pose witness.
+
+        For a joint labelled ``reference_pose`` that no recorded pose
+        actually constrains — the claim is false, and the only honest repair
+        is to drop it. Becomes ``unknown`` rather than
+        ``travel_and_urdf_limits``: how the zero was really derived is not
+        recoverable from the file, and ``unknown`` is treated as
+        limits-derived by :attr:`suspect`, which is the conservative reading.
+
+        Downgrade-only by construction. It can remove a claim and never add
+        one, so it cannot be turned into a way to launder a zero into looking
+        pose-anchored.
+        """
+        if self.zero_source != "reference_pose":
+            return self
+        return replace(self, zero_source="unknown")
+
     @property
     def span_mismatch(self) -> bool:
         """True when measured travel and the URDF's limits disagree materially.
@@ -335,6 +381,24 @@ def rezero_from_pose(
     )
 
 
+#: Per-joint override to the +1 assumed when no direction sign is supplied.
+#:
+#: A travel range alone cannot establish a sign — see the module docstring —
+#: so this is not derived from anything measured here. It exists because a
+#: physical direction-sign check on this hardware (2026-09-12, arm
+#: ``thanh_arm``) found ``wrist_roll`` turning opposite the URDF's
+#: convention while every other checked joint matched at +1. That is a
+#: property of the SO-101's assembly/URDF pairing, not of one physical unit,
+#: so it is used as the starting assumption for every SO-101 rather than
+#: re-discovered per arm — subject to revision if a check on a different
+#: unit disagrees.
+#:
+#: Still just an assumption: :func:`seed_from_travel` always returns
+#: ``validated=False``, whether a sign came from here or from the +1
+#: fallback, and Step 2's physical check is what actually certifies it.
+DEFAULT_DIRECTION_SIGN_OVERRIDES: Dict[str, int] = {"wrist_roll": -1}
+
+
 def seed_from_travel(
     names: Sequence[str],
     urdf_limits: Sequence[Tuple[float, float]],
@@ -351,20 +415,28 @@ def seed_from_travel(
     URDF's limits are approximate — and half that disagreement is kept per
     joint as ``seed_residual_rad``.
 
-    *direction_signs* defaults to +1 for every joint, which is all a travel
-    range alone can offer — see the module docstring for why. Pass measured
-    signs once a physical check has established them: the sign is not a
-    cosmetic flag on top of the same zero, because it decides *which* end of
-    the travel is the URDF's lower limit, and so changes the zero the two
-    endpoints agree on. Flipping the field alone would leave the joint
-    mirrored about the wrong point.
+    *direction_signs* defaults to :data:`DEFAULT_DIRECTION_SIGN_OVERRIDES` —
+    +1 for every joint except ``wrist_roll``, which is all a travel range
+    alone can offer even with that override; see the module docstring for
+    why a range can't establish a sign at all. Pass measured signs once a
+    physical check has established them: the sign is not a cosmetic flag on
+    top of the same zero, because it decides *which* end of the travel is
+    the URDF's lower limit, and so changes the zero the two endpoints agree
+    on. Flipping the field alone would leave the joint mirrored about the
+    wrong point.
 
     The returned calibration is ``validated=False`` regardless; supplying
-    signs records what was measured, it does not certify it.
+    signs — or matching the override — records what was measured or
+    assumed, it does not certify it. A physical check in Step 2 is still
+    required before ``mark_validated()``.
     """
     if not (len(names) == len(urdf_limits) == len(tick_ranges)):
         raise ValueError("names, urdf_limits and tick_ranges must be the same length")
-    signs = list(direction_signs) if direction_signs is not None else [1] * len(names)
+    signs = (
+        list(direction_signs)
+        if direction_signs is not None
+        else [DEFAULT_DIRECTION_SIGN_OVERRIDES.get(n, 1) for n in names]
+    )
     if len(signs) != len(names):
         raise ValueError("direction_signs must have one entry per joint")
     if any(s not in (1, -1) for s in signs):
@@ -410,7 +482,9 @@ def seed_from_travel(
         created=datetime.now(timezone.utc).isoformat(),
         notes={
             "direction_signs": (
-                "ASSUMED +1 — not derivable from a travel range"
+                "ASSUMED (+1, except wrist_roll -1 — see "
+                "DEFAULT_DIRECTION_SIGN_OVERRIDES) — not derivable from a "
+                "travel range"
                 if direction_signs is None
                 else "supplied by the caller from a physical check"
             ),

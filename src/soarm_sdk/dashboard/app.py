@@ -27,7 +27,9 @@ from .fk import (
     DEFAULT_CALIBRATION_PATH,
     SOARM100_IDS,
     load_calibration,
+    load_ghost_meshes,
     load_urdf_meshes,
+    pose_meshes,
     update_fk,
 )
 
@@ -105,6 +107,12 @@ class DashboardApp:
             else None
         )
 
+        # A translucent target the operator can aim the real arm at, hidden
+        # until a panel asks for it. Registered here rather than in the panel
+        # so the scene owns one copy: panels come and go, the scene graph
+        # does not, and a second /ghost would silently replace the first.
+        self._ghost_handles = load_ghost_meshes(self.server, self.urdf)
+
         self.server.gui.add_markdown(f"# {title}")
         self.server.gui.add_markdown("---")
         device_h = self.server.gui.add_text("Serial device", initial_value=device)
@@ -180,6 +188,18 @@ class DashboardApp:
             if not self._fk_error_logged:
                 self._fk_error_logged = True
                 logger.exception("[soarm_sdk.dashboard] FK update failed")
+
+    def show_ghost(self, cfg: Optional[Dict[str, float]]) -> None:
+        """Pose and reveal the reference ghost, or hide it when *cfg* is None.
+
+        Safe to pass around as a callback; a no-op when no URDF was loaded.
+        """
+        if not self._ghost_handles:
+            return
+        if cfg:
+            pose_meshes(self.urdf, cfg, self._ghost_handles)
+        for handle in self._ghost_handles.values():
+            handle.visible = bool(cfg)
 
     def run(self) -> None:
         """Build all registered panels as tabs, then block.

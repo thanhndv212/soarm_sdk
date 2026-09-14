@@ -94,15 +94,15 @@ class ServoRobot(Robot):
         if self._calibration is None:
             return lo, hi
 
-        cal_lo, cal_hi = self._calibration.reachable_limits()
-        if len(cal_lo) != len(lo):
-            raise ValueError(
-                f"calibration covers {len(cal_lo)} joints, config declares "
-                f"{len(lo)} — they must describe the same arm"
-            )
+        # The policy lives in one place so this and the planner cannot drift
+        # apart: accepted travel *replaces* a model's limits, unaccepted
+        # travel is intersected with them. See soarm_sdk.calibration.limits.
+        from ..calibration.limits import effective_limits
+
+        bounds = effective_limits(self._calibration, list(zip(lo, hi)))
         return (
-            np.maximum(lo, np.asarray(cal_lo, dtype=np.float64)),
-            np.minimum(hi, np.asarray(cal_hi, dtype=np.float64)),
+            np.asarray([b[0] for b in bounds], dtype=np.float64),
+            np.asarray([b[1] for b in bounds], dtype=np.float64),
         )
 
     def disconnect(self) -> None:

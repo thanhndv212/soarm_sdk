@@ -9,6 +9,144 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Calibration tab is now four tabs, worked in order, not one tab of
+  six stacked folders.** *Tolerances*, *Signs*, *Travel*, *Zeros* — split by
+  which acceptance row each owns (`TAB_STAGES`), each ending in its own
+  Review & save showing that tab's own rows plus the full record, since
+  Save writes the whole file and can refuse on a row owned by a tab you
+  have not opened. Replaces `build_calibration_panel` with
+  `build_calibration_panels` (plural); the CLI registers all four.
+
+- **A translucent reference-pose ghost in the 3-D view**
+  (`soarm_sdk.dashboard.fk.load_ghost_meshes` / `pose_meshes`,
+  `DashboardApp.show_ghost`). Shows the pose an operator is being asked to
+  physically match — set from the pose's own configuration, never from
+  servo readings — instead of leaving "fold the arm flat against itself"
+  as prose to interpret. Toggled from the Zeros tab; hidden by default and
+  shares the mirror's link geometry via `add_mesh_simple` (the only Viser
+  mesh call that takes `opacity`).
+
+- **Direction signs are six per-joint dropdowns** (`SIGN_UNCHECKED` /
+  `SIGN_OK` / `SIGN_INVERTED`), replacing a free-text "what did you check"
+  field. Selecting *Opposite* flips that joint's sign **immediately** —
+  `JointCalibration.with_direction_flipped()` — so the mirror reverses
+  while the operator is still on that joint, without waiting for a
+  Confirm click. A flip drops any pose-anchored provenance and resets
+  `validated`, since the zero was solved under the sign being abandoned.
+
+- **Withdraw an unsupported pose claim** (`with_claim_withdrawn()`,
+  `_unsupported_pose_claims`). A joint labelled `reference_pose` when the
+  recorded witness does not constrain it is a false claim, and on this
+  arm's own file four of six joints carried one. Downgrade-only by
+  construction — it can remove a claim, never manufacture one — so it
+  cannot be used to make an unverified zero look verified.
+
+- **Measuring travel in the dashboard now actually feeds the ROM
+  acceptance row.** Both the automatic sweep and the manual recorder
+  funnel through one `on_endpoints` callback into
+  `rom_endpoint_samples` — previously written only by the standalone
+  `soarm-calibrate-rom`, so the dashboard's own travel controls could
+  never satisfy the row they exist to feed, however carefully they were
+  used. Also writes the measured stops onto the joints' own
+  `tick_min`/`tick_max` (`JointCalibration.with_travel`), and flags a
+  joint whose recorded span crosses the encoder's 4095/0 wrap — that span
+  is the encoder's range, not the joint's, and no calibration zero can
+  fix it; `soarm-calibrate-rom --recentre` can.
+
+- **Discard one recorded ROM pass** without re-measuring the rest. A
+  stalled sweep or a mis-click counts as real evidence otherwise and drags
+  the whole joint's repeatability number with it — one degenerate
+  `min == max` sample turned a joint that swept cleanly twice into
+  "repeatable to 2215 ticks". Validated against the current list at click
+  time (label and index), so a pass recorded in between is never silently
+  discarded by a stale position.
+
+- **A per-joint Reset button** beside each joint's Record Min/Max in the
+  manual recorder, clearing just that joint's two recorded values —
+  previously the only way to undo a bad entry was to overwrite it.
+  Record/Reset now sit directly under that joint's own live-value label
+  instead of in one eighteen-button block below a shared table.
+
+- **`soarm_sdk.calibration.limits.effective_limits`**: accepted ROM travel
+  now *replaces* a model's declared joint limits for `ServoRobot` and for
+  `soarm_tamp`'s planner, rather than always being intersected with them —
+  intersection silently keeps the more conservative number even once the
+  travel is trustworthy, which is what clamped a planned trajectory on 55%
+  of its waypoints. Gated on `measured_is_trusted` (the ROM acceptance row
+  passing: repeated, non-simulated, within tolerance), because an
+  unaccepted sweep can be the *encoder's* range on a wrapped joint —
+  handing that to a planner unconditionally would be worse than staying
+  conservative.
+
+- Suggested starting values for the acceptance-tolerance form (3 deg pose
+  repeatability, 3 deg model deviation, 30 tick ROM repeatability) —
+  starting points to review and commit, never a fallback: an unrecorded
+  calibration still has no tolerances, and the acceptance row still
+  blocks on it.
+
+### Fixed
+
+- **`soarm_sdk.kinematics.urdf_fk.MEMBERS` measured the wrong line.** A
+  member's pitch was the chord between two *joint-frame origins*, not the
+  member's own body axis — on the SO-101 those origins sit ~14 deg off the
+  upper arm's axis and ~3 deg off the forearm's. Every reference pose here
+  had been solved to level that chord, so `folded_flat` rendered with its
+  upper arm visibly sloped while reporting itself level, and was 11.75 deg
+  from its own defining constraint (the two links resting face to face).
+  `MEMBERS` now carries each member's body axis (from its shell mesh's
+  oriented bounding box); `folded_flat` re-solves to the clean
+  `(0, -pi/2, +pi/2, 0, 0, 0)` and is now inside the URDF's elbow limit
+  (it previously overshot by 9.4 deg and rendered self-intersecting).
+  `LEVEL` turns out to be the URDF's own zero after all — the
+  `rezero_from_pose` docstring this module was written to correct was
+  right the first time. **Any zero pinned against the previous pose values
+  is off by that offset** (~14 deg on `shoulder_lift`, ~16 deg on
+  `elbow_flex`) and should be re-pinned.
+
+- **`wrist_roll`'s assumed direction sign, in every "no info supplied"
+  fallback.** `soarm_sdk.calibration.frame.DEFAULT_DIRECTION_SIGN_OVERRIDES`,
+  `conversions.SOARM100_DIRECTION_SIGNS`, and `configs/so101.yaml`'s
+  `hardware.direction_signs` now all assume `wrist_roll = -1`, the other
+  five `+1` — previously all six defaulted to `+1`. These are still
+  assumptions, not certifications: `seed_from_travel` returns
+  `validated=False` regardless of which sign it used, and Step 2's live
+  check is what actually confirms it. (This default was itself revised
+  mid-investigation from a live check contradicting the indirect
+  hard-stop-landing method that first established it — see the Sep-14
+  entry in a real arm's `notes["superseded_validated_by"]`.)
+
+- **Fine-alignment sliders ran a flat +-45 deg on every joint.** Matched no
+  joint on this arm — short of the gripper's jaw travel, nowhere near
+  `wrist_roll`'s -157..+163, and symmetric on a joint (the gripper) that
+  is not. Each slider is now bounded by that joint's own URDF travel
+  (`_alignment_range`).
+
+- **A refused Save was indistinguishable from a successful one.** Its
+  reply went only to a status line built above Step 1 — several screens
+  above the Save button at the bottom — and multi-line messages (the
+  refusal is a markdown table) were wrapped in `*emphasis*`, which
+  renders literal asterisks around broken rows. A result now appears
+  directly beside every tab's Save button as well.
+
+- A long provenance note (`validated_by`) was printed on screen verbatim —
+  956 characters on this arm's own file, longer than every other word on
+  the tab combined. Reduced to a headline plus a "+N more notes" count;
+  the full text stays in the calibration file, and pipe-joined records are
+  counted rather than run together into one sentence about neither.
+
+### Changed
+
+- Prose across all four calibration tabs trimmed by roughly two thirds —
+  reasoning that belongs in a docstring moved there; only what prevents a
+  mistake stayed on screen.
+
+- **Guided calibration acceptance pipeline.** `CalibrationPipeline` records
+  fail-closed evidence for explicit per-arm tolerances, physical
+  direction-sign verification, repeated ROM endpoints, named-pose zero
+  provenance, and pose repeatability. The new
+  `soarm-dashboard-calibration` Viser entry point keeps this workflow in the
+  SDK; TAMP consumes its accepted result read-only.
+
 - **The background bus thread now reads the whole telemetry block.** The
   sync-read group widened from 4 bytes (position + speed) to the full
   read-only SRAM span, addresses 56-70: position, speed, load, voltage,
@@ -120,6 +258,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limits-derived, so nothing silently becomes trusted.
 
 ### Changed
+
+- **The Calibration tab now reads in the order the work is done.** Its
+  folders were emitted 1, 1, 0, 2, 3, 4, 4, 5: two steps numbered 1, two
+  numbered 4, and the prerequisite numbered 0 sitting *below* the step that
+  depends on it. The numbers matched neither each other, nor the acceptance
+  record's rows, nor the sequence of the work. Every folder was correct on
+  its own, which is why it survived — nothing was broken, it was only
+  impossible to follow. The tab is now one linear pass: banners, a *Live arm
+  state* panel that is deliberately not a step, then Steps 1-6 (tolerances,
+  direction signs, ROM, pose zeros, optional nudge, review and save).
+  `CalibrationReport.as_markdown()` labels its rows with those same step
+  numbers, so a BLOCKED row names a folder that exists. Tests assert the
+  ordering, since nothing about it fails loudly.
+- **The status line moved above the steps.** Every button in the tab writes
+  to one `status_md`, which was created last — so pressing the tolerances
+  button in the first folder printed the reply several screens down, past
+  every other step. It and the unsaved-drift and out-of-limits banners now
+  sit above Step 1, where they apply to everything below them.
+- **The acceptance record moved next to the Save it gates**, from mid-panel
+  into Step 6, so the reason Save refused and the button that refused are on
+  one screen.
+- **The acceptance record renders while disconnected.** `_on_tick` returned
+  early with no arm attached, freezing the record on "waiting for
+  calibration" — the one panel that says what remains to be done was blank
+  until the thing it grades was live. Calibration-derived sections now
+  refresh unconditionally; only the live-reading sections wait for a
+  connection.
+- `_build_homing` takes `heading=False`, so the ROM controls embedded in
+  Step 3 no longer nest a second `## Homing Wizard` title inside a numbered
+  folder.
+- The `calibrate` skill's procedure cites the tab's step numbers per stage,
+  and documents the optional nudge it had omitted.
 
 - **One launcher for the calibration CLIs.** `examples/` carried
   `calibrate.py` and `calibrate_arm.py`, two near-identical `sys.path`

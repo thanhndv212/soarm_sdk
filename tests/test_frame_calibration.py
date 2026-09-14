@@ -145,9 +145,49 @@ def test_gripper_span_is_flagged_as_suspect(seeded: RobotCalibration) -> None:
 
 
 def test_direction_signs_are_assumed_and_flagged(seeded: RobotCalibration) -> None:
-    assert seeded.direction_signs == [1] * 6
+    """wrist_roll is -1 by default, not +1 — see DEFAULT_DIRECTION_SIGN_OVERRIDES."""
+    by_name = dict(zip(seeded.names, seeded.direction_signs))
+    assert by_name == {
+        "shoulder_pan": 1, "shoulder_lift": 1, "elbow_flex": 1,
+        "wrist_flex": 1, "wrist_roll": -1, "gripper": 1,
+    }
     assert seeded.validated is False
     assert "ASSUMED" in seeded.notes["direction_signs"]
+
+
+def test_wrist_roll_defaults_to_a_flipped_sign():
+    """2026-09-12 physical check on thanh_arm found it turning opposite the
+    URDF's convention. A travel range still can't establish this by itself —
+    it is an assumption, not a measurement, and validated stays False."""
+    from soarm_sdk.calibration.frame import (
+        DEFAULT_DIRECTION_SIGN_OVERRIDES,
+        seed_from_travel,
+    )
+
+    assert DEFAULT_DIRECTION_SIGN_OVERRIDES == {"wrist_roll": -1}
+    j = seed_from_travel(
+        ["wrist_roll"], [(-2.74385, 2.84121)], [(102, 3993)]
+    ).joints[0]
+    assert j.direction_sign == -1
+
+
+def test_every_other_joint_still_defaults_to_positive():
+    from soarm_sdk.calibration.frame import seed_from_travel
+
+    for name in ("shoulder_pan", "shoulder_lift", "elbow_flex",
+                 "wrist_flex", "gripper"):
+        j = seed_from_travel([name], [(-1.0, 1.0)], [(1000, 3000)]).joints[0]
+        assert j.direction_sign == 1
+
+
+def test_an_explicit_sign_overrides_the_wrist_roll_default():
+    from soarm_sdk.calibration.frame import seed_from_travel
+
+    j = seed_from_travel(
+        ["wrist_roll"], [(-2.74385, 2.84121)], [(102, 3993)],
+        direction_signs=[1],
+    ).joints[0]
+    assert j.direction_sign == 1
 
 
 def test_seeding_rejects_degenerate_input() -> None:
@@ -251,12 +291,13 @@ def test_negative_sign_maps_the_other_endpoint_to_the_lower_limit():
 def test_negative_sign_zero_differs_when_limits_are_asymmetric():
     from soarm_sdk.calibration.frame import seed_from_travel
 
-    # wrist_roll's real numbers from the arm: asymmetric URDF limits.
+    # This arm's real numbers (asymmetric URDF limits) under a generic
+    # joint name, so the test exercises the sign argument rather than
+    # DEFAULT_DIRECTION_SIGN_OVERRIDES, which now defaults "wrist_roll" to
+    # the same -1 the "neg" case asks for explicitly.
     limits, ticks = [(-2.74385, 2.84121)], [(102, 3993)]
-    pos = seed_from_travel(["wrist_roll"], limits, ticks).joints[0]
-    neg = seed_from_travel(
-        ["wrist_roll"], limits, ticks, direction_signs=[-1]
-    ).joints[0]
+    pos = seed_from_travel(["j"], limits, ticks, direction_signs=[1]).joints[0]
+    neg = seed_from_travel(["j"], limits, ticks, direction_signs=[-1]).joints[0]
 
     assert pos.zero_offset_ticks != pytest.approx(neg.zero_offset_ticks)
     # Each end of the travel must still land on a URDF limit, swapped over.

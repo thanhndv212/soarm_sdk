@@ -33,17 +33,29 @@ __all__ = [
     "member_pitches",
 ]
 
-#: The arm's three visible straight sections, as ``(name, from_link, to_link)``.
+#: The arm's three visible straight sections, as ``(name, link, body_axis)``.
 #:
 #: Each is a rigid member whose pitch an operator can measure directly —
 #: a phone inclinometer laid on it, or a spirit level. That is the whole
 #: point: a joint angle is a number inside the model with no independent
 #: witness, but "is the forearm level?" is a question the arm itself
 #: answers. Every zero in the calibration was ultimately pinned this way.
-MEMBERS: Tuple[Tuple[str, str, str], ...] = (
-    ("upper_arm", "upper_arm_link", "lower_arm_link"),
-    ("forearm", "lower_arm_link", "wrist_link"),
-    ("wrist_section", "wrist_link", "gripper_link"),
+#:
+#: ``body_axis`` is a unit vector **in the link's own frame**, along the
+#: member's long axis — the direction a level laid on it would follow.
+#:
+#: It used to be the chord between two joint-frame *origins*, and that is
+#: not the same line. On the SO-101 the shoulder and elbow origins sit off
+#: the upper arm's axis, so the chord runs about 14 deg away from the body:
+#: at ``folded_flat`` the chord read level while the member was visibly
+#: sloped. Every pose here was solved to make the chords come out right,
+#: so every one of them was wrong by that offset — and so was every zero
+#: pinned against them. Measured from the shell meshes' oriented bounding
+#: boxes; ``tests/test_reference_poses.py`` re-derives them from the URDF.
+MEMBERS: Tuple[Tuple[str, str, Tuple[float, float, float]], ...] = (
+    ("upper_arm", "upper_arm_link", (-0.999998, -0.000187, -0.001815)),
+    ("forearm", "lower_arm_link", (-1.000000, 0.000002, -0.000969)),
+    ("wrist_section", "wrist_link", (0.012632, -0.999920, 0.000052)),
 )
 
 
@@ -130,15 +142,17 @@ def member_pitches(
     urdf.update_cfg({k: float(v) for k, v in cfg.items()})
     scene = urdf.scene
     out: Dict[str, float] = {}
-    for name, from_link, to_link in MEMBERS:
+    for name, link, body_axis in MEMBERS:
         try:
-            T_from, _ = scene.graph[from_link]
-            T_to, _ = scene.graph[to_link]
+            T, _ = scene.graph[link]
         except Exception:
             continue
-        v = T_to[:3, 3] - T_from[:3, 3]
+        v = T[:3, :3] @ np.asarray(body_axis, dtype=float)
         norm = float(np.linalg.norm(v))
         if norm < 1e-9:
             continue
-        out[name] = float(np.degrees(np.arcsin(v[2] / norm)))
+        # Elevation above horizontal, which is what a level or an
+        # inclinometer reads. It folds at +-90 deg, exactly as the
+        # instrument does: neither can say which side of vertical you are on.
+        out[name] = float(np.degrees(np.arctan2(v[2], float(np.hypot(v[0], v[1])))))
     return out

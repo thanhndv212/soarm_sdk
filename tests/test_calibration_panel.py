@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import inspect
 import math
+import re
 
 import pytest
 
@@ -400,17 +401,368 @@ def test_the_default_calibration_path_is_resolved_not_left_none(tmp_path):
 
 
 def test_a_pose_past_the_urdf_limits_warns_before_you_hold_it():
-    """FOLDED_FLAT is 9.4 deg past the elbow ceiling and is still correct.
+    """A pose the model cannot represent must be called out, not rendered mute.
 
-    Without this the operator holds exactly the pose they were asked for
-    and watches the mirror self-intersect, which reads as the re-zero
-    having broken something.
+    Otherwise the operator holds exactly the pose they were asked for and
+    watches the mirror self-intersect, which reads as the re-zero having
+    broken something.
+
+    No shipped pose exceeds the limits any more — FOLDED_FLAT used to, by
+    9.4 deg, but that was the wrong solve rather than conservative limits
+    (see test_reference_poses). The warning still has to work, so this
+    exercises it against a pose built to trip it.
     """
-    from soarm_sdk.calibration.reference import FOLDED_FLAT
+    from soarm_sdk.calibration.reference import ReferencePose
     from soarm_sdk.dashboard.panels.calibration import URDF_LIMITS as LIM
 
-    elbow = FOLDED_FLAT.as_cfg()["elbow_flex"]
-    assert elbow > LIM["elbow_flex"][1], "pose should exceed the URDF ceiling"
+    over = ReferencePose(
+        key="over", label="past the ceiling",
+        q=(0.0, 0.0, LIM["elbow_flex"][1] + 0.2, 0.0, 0.0, 0.0),
+        setup="—", verify_by="—", covers=("elbow_flex",),
+    )
+    assert over.as_cfg()["elbow_flex"] > LIM["elbow_flex"][1]
+
+
+def test_no_shipped_pose_asks_for_something_the_model_cannot_render():
+    from soarm_sdk.calibration.reference import REFERENCE_POSES
+    from soarm_sdk.dashboard.panels.calibration import URDF_LIMITS as LIM
+
+    for pose in REFERENCE_POSES.values():
+        for name, q in pose.as_cfg().items():
+            lo, hi = LIM[name]
+            assert lo <= q <= hi, f"{pose.key}.{name} = {q}"
+
+
+# -- the shape of the tab ----------------------------------------------
+#
+# These assert on structure rather than behaviour, which is unusual, but the
+# thing being protected here *is* structure: the tab shipped with its folders
+# emitted 1, 1, 0, 2, 3, 4, 4, 5 — two steps numbered 1, two numbered 4, and
+# the prerequisite numbered 0 below the step needing it. Every folder was
+# individually correct, so nothing failed and nothing caught it.
+
+
+def _tab_builders() -> list:
+    """The four tab builders, in the order build_calibration_panels lists them."""
+    from soarm_sdk.dashboard.panels import calibration
+
+    src = inspect.getsource(calibration.build_calibration_panels)
+    return re.findall(r"_tab_(\w+)\(server", src)
+
+
+def _tab_names() -> list:
+    from soarm_sdk.dashboard.panels import calibration
+
+    return re.findall(
+        r'Panel\(\s*"([^"]+)"',
+        inspect.getsource(calibration.build_calibration_panels),
+    )
+
+
+def _folder_titles(tab: str) -> list:
+    """Folder titles one tab emits, in order."""
+    from soarm_sdk.dashboard.panels import calibration
+
+    titles = []
+    src = inspect.getsource(getattr(calibration, f"_tab_{tab}"))
+    for helper in re.findall(r"(_build_\w+)\(server", src):
+        titles += re.findall(r'add_folder\(\s*"([^"]+)"', inspect.getsource(
+            getattr(calibration, helper)))
+    return titles
+
+
+def test_there_are_four_tabs_in_workflow_order():
+    """Tolerances gate the grading, signs cannot be fixed by a zero, travel
+    is measured before zeros are pinned inside it, zeros last."""
+    assert _tab_builders() == ["tolerances", "signs", "travel", "zeros"]
+
+
+def test_the_tab_names_are_numbered_so_the_order_is_visible():
+    names = _tab_names()
+    assert len(names) == 4
+    for i, name in enumerate(names, start=1):
+        assert name.startswith(f"{i} ·"), names
+
+
+def test_every_tab_states_where_it_sits_in_the_order():
+    from soarm_sdk.dashboard.panels import calibration
+
+    for i, tab in enumerate(_tab_builders(), start=1):
+        src = inspect.getsource(getattr(calibration, f"_tab_{tab}"))
+        assert f"handles, {i}," in src, tab
+    banner = inspect.getsource(calibration._order_banner)
+    assert "of 4" in banner
+    assert "in order" in banner
+
+
+def test_each_acceptance_row_is_owned_by_exactly_one_tab():
+    """A row nobody owns is a blocker with no tab to fix it in."""
+    from soarm_sdk.calibration.pipeline import PipelineStage
+    from soarm_sdk.dashboard.panels.calibration import TAB_STAGES
+
+    owned = [st for stages in TAB_STAGES.values() for st in stages]
+    assert sorted(owned, key=lambda s: s.value) == sorted(
+        PipelineStage, key=lambda s: s.value
+    )
+    assert len(owned) == len(set(owned))
+    assert list(TAB_STAGES) == _tab_builders()
+
+
+def test_live_state_is_repeated_on_every_tab_that_checks_against_it():
+    """Sending the operator to another tab to read the arm defeats the split."""
+    from soarm_sdk.dashboard.panels import calibration
+
+    for tab in ("signs", "travel", "zeros"):
+        src = inspect.getsource(getattr(calibration, f"_tab_{tab}"))
+        assert "_build_live_state" in src, tab
+    # Tolerances needs no arm reading at all.
+    assert "_build_live_state" not in inspect.getsource(calibration._tab_tolerances)
+
+
+def test_every_tab_puts_its_status_line_at_the_top():
+    from soarm_sdk.dashboard.panels import calibration
+
+    src = inspect.getsource(calibration._tab_header)
+    assert '_reg(handles, "status_md"' in src
+    for tab in _tab_builders():
+        body = inspect.getsource(getattr(calibration, f"_tab_{tab}"))
+        assert body.index("_tab_header") < body.index("_build_review"), tab
+
+
+def test_every_tab_ends_with_its_own_review_and_save():
+    from soarm_sdk.dashboard.panels import calibration
+
+    for tab in _tab_builders():
+        src = inspect.getsource(getattr(calibration, f"_tab_{tab}"))
+        assert f'tab="{tab}"' in src, tab
+        # ...and it is the last thing the tab builds.
+        assert src.rindex("_build_review") > max(
+            src.rindex(h) for h in re.findall(r"_build_\w+", src)
+            if h != "_build_review"
+        ), tab
+
+    review = inspect.getsource(calibration._build_review)
+    assert "Save calibration" in review
+    assert 'pipeline_md' in review
+    assert 'save_md' in review
+
+
+def test_the_review_shows_the_whole_record_not_just_this_tabs_rows():
+    """Save refuses on rows owned by tabs you have not opened; that has to be
+    visible from the button rather than inferred."""
+    from soarm_sdk.dashboard.panels import calibration
+
+    src = inspect.getsource(calibration._build_review)
+    assert "stage_mds" in src        # this tab's own rows
+    assert "pipeline_md" in src      # and every other tab's
+
+
+def test_the_record_labels_still_name_steps_the_operator_can_find():
+    from soarm_sdk.calibration.pipeline import CalibrationPipeline
+
+    report = CalibrationPipeline(_cal()).report().as_markdown()
+    cited = {int(n) for n in re.findall(r"Step (\d+) -", report)}
+    assert cited, report
+    assert cited <= {1, 2, 3, 4}
+
+
+def test_the_travel_tab_embeds_the_homing_workflow():
+    """ROM measurement must not be split off from the calibration flow."""
+    from soarm_sdk.dashboard.panels import calibration
+
+    assert "_build_rom" in inspect.getsource(calibration._tab_travel)
+    assert "_build_homing" in inspect.getsource(calibration._build_rom)
+
+
+def test_the_embedded_rom_step_does_not_retitle_itself():
+    """A "## Homing Wizard" heading inside "Step 3" reads as a second tool."""
+    from soarm_sdk.dashboard.panels import calibration
+
+    assert "heading=False" in inspect.getsource(calibration._build_rom)
+
+
+def test_step_4_leads_with_the_pose_not_the_symmetry_table():
+    """Opening on the travel midpoint framed the step as the one method it
+    deliberately does not use.
+
+    Step 4 pins a zero to a pose that was checked against the world. The
+    hard-stop symmetry check reasons from the travel instead, cannot tell a
+    bad zero from an asymmetric mechanism, and has already produced one
+    false positive on this arm. Leading with it made the step read as
+    midpoint-finding.
+    """
+    from soarm_sdk.dashboard.panels import calibration
+
+    src = inspect.getsource(calibration._build_rezero)
+    assert src.index("Re-zero to this pose") < src.index("_build_symmetry")
+    assert "symmetry_md" not in src
+
+
+def test_the_symmetry_check_is_collapsed_and_says_it_sets_nothing():
+    from soarm_sdk.dashboard.panels import calibration
+
+    src = inspect.getsource(calibration._build_symmetry)
+    assert "expand_by_default=False" in src
+    assert "sets nothing" in src
+    assert "symmetry_md" in src
+
+
+def test_the_symmetry_table_points_back_up_not_down():
+    """It used to end "confirm it against a reference pose below"; the pose
+    picker is now above it, and a stale direction sends the operator off the
+    end of the panel."""
+    from soarm_sdk.dashboard.panels.calibration import _format_symmetry
+
+    cal = _cal()
+    for j in cal.joints:
+        object.__setattr__(j, "zero_source", "travel_and_urdf_limits")
+    i = cal.names.index("shoulder_pan")
+    object.__setattr__(cal.joints[i], "tick_min", int(cal.joints[i].to_ticks(-0.5)))
+    object.__setattr__(cal.joints[i], "tick_max", int(cal.joints[i].to_ticks(1.5)))
+    out = _format_symmetry(cal)
+    assert "below" not in out
+    assert "do **not** subtract" in out
+
+
+def test_the_symmetry_table_never_tells_you_to_apply_the_gap():
+    """A gap is a question. Subtracting it is how the false positive bites."""
+    from soarm_sdk.dashboard.panels.calibration import _format_symmetry
+
+    cal = _cal()
+    out = _format_symmetry(cal)
+    assert "never a correction" in out
+
+
+# -- confirming the direction signs -------------------------------------
+
+
+def test_the_tab_can_record_a_direction_sign_check():
+    """The step the tab asked for and could not accept.
+
+    ``PipelineStage.DIRECTION_SIGNS`` gates Save on ``validated``, nothing in
+    the dashboard called ``mark_validated``, and no other step sets it — so
+    the record's sign row was permanently BLOCKED and Save could never
+    succeed from this tab at all.
+    """
+    from soarm_sdk.dashboard.panels import calibration
+
+    assert "mark_validated" in inspect.getsource(calibration._build_signs)
+
+
+def test_a_recorded_check_unblocks_only_the_sign_row():
+    from soarm_sdk.calibration.pipeline import CalibrationPipeline, PipelineStage
+
+    cal = _cal()
+    cal.validated = False
+    before = CalibrationPipeline(cal).report()
+    assert not before.stage(PipelineStage.DIRECTION_SIGNS).passed
+
+    cal.mark_validated("jogged each joint and watched the mirror")
+    after = CalibrationPipeline(cal).report()
+    assert after.stage(PipelineStage.DIRECTION_SIGNS).passed
+    assert cal.notes["validated_by"].startswith("jogged")
+
+
+def test_an_edit_reaches_the_un_nudged_base_as_well_as_the_live_copy():
+    """While a slider is off zero these are two objects, and the base wins.
+
+    ``_apply`` rebuilds the live calibration from the base on every slider
+    move, so provenance written only to the live copy is discarded by the
+    next twitch of a slider.
+    """
+    from soarm_sdk.dashboard.panels.calibration import _live_calibrations
+
+    live, base = _cal(), _cal()
+    ctx = _Ctx(live)
+    assert set(map(id, _live_calibrations(ctx, {"nudge_base": base}))) == {
+        id(live),
+        id(base),
+    }
+
+
+def test_one_calibration_is_not_written_to_twice():
+    """After a re-zero the live copy *is* the base; do not double-apply."""
+    from soarm_sdk.dashboard.panels.calibration import _live_calibrations
+
+    cal = _cal()
+    assert _live_calibrations(_Ctx(cal), {"nudge_base": cal}) == [cal]
+
+
+def test_no_calibration_is_not_an_error():
+    from soarm_sdk.dashboard.panels.calibration import _live_calibrations
+
+    assert _live_calibrations(_Ctx(None), {}) == []
+
+
+def test_an_unconfirmed_sign_says_so_rather_than_staying_blank():
+    from soarm_sdk.dashboard.panels.calibration import _format_signs
+
+    cal = _cal()
+    cal.validated = False
+    assert "Not confirmed" in _format_signs(cal)
+
+
+def test_a_confirmed_sign_reports_what_was_actually_done():
+    from soarm_sdk.dashboard.panels.calibration import _format_signs
+
+    cal = _cal()
+    cal.mark_validated("levelled the upper arm and jogged J2")
+    out = _format_signs(cal)
+    assert "Confirmed" in out
+    assert "levelled the upper arm" in out
+
+
+# -- the record must be readable before the arm is plugged in -----------
+
+
+class _OfflineCtx(_Ctx):
+    """A context with a calibration loaded and no arm attached."""
+
+    def __init__(self, calibration):
+        super().__init__(calibration)
+        import threading
+        import types
+
+        self.lock = threading.Lock()
+        self.state = types.SimpleNamespace(positions={}, connected=False)
+
+    def calibration_drift(self):
+        return []
+
+
+def test_the_blocked_steps_are_listed_while_disconnected():
+    """What is left to do must be readable before deciding to plug in.
+
+    ``_on_tick`` returned early when disconnected, which froze the acceptance
+    record on "waiting for calibration" — the one panel that says what
+    remains was blank until the thing it grades was live.
+    """
+    from soarm_sdk.dashboard.panels.calibration import _on_tick
+
+    class _MD:
+        content = ""
+
+    handles = {
+        k: [_MD()]
+        for k in (
+            "symmetry_md",
+            "claims_md",
+            "signs_md",
+            "drift_md",
+            "pipeline_md",
+            "table_md",
+            "pinned_md",
+            "members_md",
+            "outside_md",
+        )
+    }
+    cal = _cal()
+    cal.validated = False
+    _on_tick(_OfflineCtx(cal), handles)
+
+    assert "BLOCKED" in handles["pipeline_md"][0].content
+    assert "Not confirmed" in handles["signs_md"][0].content
+    assert "Not connected" in handles["table_md"][0].content
 
 
 # -- an arm that settles after the re-zero ------------------------------
@@ -458,3 +810,761 @@ def test_nothing_is_said_before_any_rezero():
     from soarm_sdk.dashboard.panels.calibration import _format_pinned
 
     assert _format_pinned({}, _rows_at({"elbow_flex": 3371})) == ""
+
+
+# -- flipping a sign, live ----------------------------------------------
+
+
+def test_flipping_reverses_the_reported_angle_about_the_same_zero_tick():
+    j = JointCalibration("wrist_roll", 1000.0, 1, 0, 4095)
+    f = j.with_direction_flipped()
+    assert f.direction_sign == -1
+    assert f.to_rad(2000.0) == pytest.approx(-j.to_rad(2000.0))
+    # Which tick reads zero does not move; only which way angle increases.
+    assert f.zero_offset_ticks == j.zero_offset_ticks
+    assert f.to_rad(1000.0) == 0.0
+
+
+def test_flipping_drops_a_pose_anchored_provenance():
+    """rezero_from_pose solves zero = ticks - sign*rad, so the sign is in it.
+
+    A zero pinned under the old sign does not survive the flip, and must not
+    keep claiming a pose witness it no longer has.
+    """
+    j = JointCalibration("a", 1000.0, 1, 0, 4095, zero_source="reference_pose")
+    assert j.with_direction_flipped().zero_source == "manual_sign_flip"
+
+
+def test_flipping_does_not_move_the_measured_travel():
+    j = JointCalibration("a", 1000.0, 1, 500, 3500)
+    f = j.with_direction_flipped()
+    assert (f.tick_min, f.tick_max) == (500, 3500)
+
+
+def test_flipping_twice_is_the_identity():
+    """Changing the answer back must undo the flip, not compound it."""
+    j = JointCalibration("a", 1000.0, 1, 0, 4095)
+    assert j.with_direction_flipped().with_direction_flipped().direction_sign == 1
+
+
+def _signs_ctx():
+    """A context whose calibration is pose-anchored and already validated."""
+    cal = _cal()
+    cal.notes = {
+        "rezeroed_from_dashboard": {"pose": "folded_flat", "joints": ["shoulder_lift"]},
+        "reference_pose_samples": [{}, {}],
+    }
+    return _Ctx(cal), cal
+
+
+class _Dropdown:
+    def __init__(self, value):
+        self.value = value
+
+
+def test_selecting_opposite_flips_the_sign_without_waiting_for_the_button():
+    """The mirror has to reverse while the operator is still on that joint."""
+    from soarm_sdk.dashboard.panels.calibration import SIGN_INVERTED, _apply_signs
+
+    ctx, cal = _signs_ctx()
+    handles = {"sign_verdicts": {"wrist_roll": _Dropdown(SIGN_INVERTED)}}
+    _apply_signs(ctx, handles)
+
+    assert cal.joints[cal.names.index("wrist_roll")].direction_sign == -1
+
+
+def test_a_flip_invalidates_the_pose_witness_and_the_recorded_check():
+    from soarm_sdk.dashboard.panels.calibration import SIGN_INVERTED, _apply_signs
+
+    ctx, cal = _signs_ctx()
+    _apply_signs(ctx, {"sign_verdicts": {"wrist_roll": _Dropdown(SIGN_INVERTED)}})
+
+    assert "rezeroed_from_dashboard" not in cal.notes
+    assert "reference_pose_samples" not in cal.notes
+    assert cal.validated is False
+
+
+def test_changing_the_answer_back_undoes_the_flip():
+    """Derived from the dropdowns each time, never accumulated."""
+    from soarm_sdk.dashboard.panels.calibration import (
+        SIGN_INVERTED,
+        SIGN_OK,
+        _apply_signs,
+    )
+
+    ctx, cal = _signs_ctx()
+    handles = {"sign_verdicts": {"wrist_roll": _Dropdown(SIGN_INVERTED)}}
+    _apply_signs(ctx, handles)
+    handles["sign_verdicts"]["wrist_roll"] = _Dropdown(SIGN_OK)
+    _apply_signs(ctx, handles)
+
+    assert cal.joints[cal.names.index("wrist_roll")].direction_sign == 1
+
+
+def test_reapplying_the_same_verdict_does_not_flip_again():
+    from soarm_sdk.dashboard.panels.calibration import SIGN_INVERTED, _apply_signs
+
+    ctx, cal = _signs_ctx()
+    handles = {"sign_verdicts": {"wrist_roll": _Dropdown(SIGN_INVERTED)}}
+    _apply_signs(ctx, handles)
+    _apply_signs(ctx, handles)
+    _apply_signs(ctx, handles)
+
+    assert cal.joints[cal.names.index("wrist_roll")].direction_sign == -1
+
+
+def test_a_flip_reaches_the_un_nudged_base_too():
+    from soarm_sdk.dashboard.panels.calibration import SIGN_INVERTED, _apply_signs
+
+    ctx, live = _signs_ctx()
+    base = _cal()
+    _apply_signs(
+        ctx,
+        {"sign_verdicts": {"wrist_roll": _Dropdown(SIGN_INVERTED)}, "nudge_base": base},
+    )
+    for cal in (live, base):
+        assert cal.joints[cal.names.index("wrist_roll")].direction_sign == -1
+
+
+def test_a_flipped_joint_is_named_as_needing_a_repin():
+    from soarm_sdk.dashboard.panels.calibration import _format_signs
+
+    cal = _cal()
+    i = cal.names.index("wrist_roll")
+    cal.joints[i] = cal.joints[i].with_direction_flipped()
+    out = _format_signs(cal)
+    assert "wrist_roll" in out
+    assert "tab 4" in out
+
+
+# -- the reference-pose ghost -------------------------------------------
+
+
+def test_step_4_offers_the_ghost_and_the_alignment_sliders():
+    """The pose is a target to match, not prose to interpret."""
+    from soarm_sdk.dashboard.panels import calibration
+
+    src = inspect.getsource(calibration._build_rezero)
+    assert "ghost_fn" in src
+    assert "Show reference ghost" in src
+    assert "_build_alignment" in src
+
+
+def test_the_ghost_is_posed_from_the_selected_pose_not_the_arm():
+    """It shows where the arm should be; servo readings must not touch it."""
+    from soarm_sdk.dashboard.panels import calibration
+
+    src = inspect.getsource(calibration._build_rezero)
+    assert "pose.as_cfg()" in src
+    assert "state.positions" not in src
+
+
+def test_unticking_the_ghost_hides_it_rather_than_posing_it_somewhere():
+    from soarm_sdk.dashboard.panels import calibration
+
+    src = inspect.getsource(calibration._build_rezero)
+    assert "ghost_fn(pose.as_cfg() if ghost_h.value else None)" in src
+
+
+def test_there_is_exactly_one_set_of_zero_sliders():
+    """Two controls editing the same zeros in two folders is one too many.
+
+    The nudge used to be its own numbered step after the pin, with no visual
+    target to work against — you nudged until it "looked right", with
+    nothing in the scene defining right.
+    """
+    from soarm_sdk.dashboard.panels import calibration
+
+    assert not hasattr(calibration, "_build_nudge")
+    builders = [
+        n
+        for n in dir(calibration)
+        if n.startswith("_build_")
+        and "add_slider" in inspect.getsource(getattr(calibration, n))
+    ]
+    assert builders == ["_build_alignment"], builders
+
+
+def test_the_alignment_sliders_still_edit_the_zero_not_the_arm():
+    from soarm_sdk.dashboard.panels import calibration
+
+    src = inspect.getsource(calibration._build_alignment)
+    assert "shifted_by" in src
+    assert 'handles["nudges"] = nudges' in src
+    # A nudge is not pose-anchored evidence; it must drop the witness.
+    assert 'live.notes.pop("rezeroed_from_dashboard", None)' in src
+
+
+# -- alignment slider bounds --------------------------------------------
+
+
+def test_each_slider_is_bounded_by_its_own_joints_travel():
+    """A flat +-45 deg matched no joint on this arm.
+
+    It is far past the gripper's jaw travel and nowhere near wrist_roll's,
+    so a slider end meant nothing physical in either direction.
+    """
+    from soarm_sdk.dashboard.panels.calibration import _alignment_range
+
+    for name, (lo, hi) in URDF_LIMITS.items():
+        got = _alignment_range(name)
+        assert got == (round(math.degrees(lo), 2), round(math.degrees(hi), 2)), name
+
+
+def test_an_asymmetric_joint_gets_an_asymmetric_slider():
+    """The gripper opens one way; +-45 implied it swung both."""
+    from soarm_sdk.dashboard.panels.calibration import _alignment_range
+
+    lo, hi = _alignment_range("gripper")
+    assert lo == pytest.approx(-10.0, abs=0.01)
+    assert hi == pytest.approx(100.0, abs=0.01)
+    assert abs(lo) != pytest.approx(abs(hi))
+
+
+def test_a_joint_with_no_declared_limit_falls_back_rather_than_going_infinite():
+    from soarm_sdk.dashboard.panels.calibration import (
+        NUDGE_LIMIT_DEG,
+        _alignment_range,
+    )
+
+    assert _alignment_range("not_a_joint") == (-NUDGE_LIMIT_DEG, NUDGE_LIMIT_DEG)
+
+
+def test_the_sliders_are_built_from_that_range_not_a_constant():
+    from soarm_sdk.dashboard.panels import calibration
+
+    src = inspect.getsource(calibration._build_alignment)
+    assert "_alignment_range(name)" in src
+    assert "min=-NUDGE_LIMIT_DEG" not in src
+
+
+# -- withdrawing a pose claim no pose backs -----------------------------
+
+
+def test_a_claim_is_unsupported_when_the_witness_does_not_cover_the_joint():
+    """The real file: all six stamped reference_pose, witness covers two."""
+    from soarm_sdk.dashboard.panels.calibration import _unsupported_pose_claims
+
+    cal = _cal()  # every joint zero_source="reference_pose"
+    cal.notes = {"rezeroed_from_dashboard": {"pose": "folded_flat"}}
+    assert _unsupported_pose_claims(cal) == [
+        "shoulder_pan",
+        "wrist_flex",
+        "wrist_roll",
+        "gripper",
+    ]
+
+
+def test_joints_the_witness_does_cover_are_left_alone():
+    from soarm_sdk.dashboard.panels.calibration import _unsupported_pose_claims
+
+    cal = _cal()
+    cal.notes = {"rezeroed_from_dashboard": {"pose": "folded_flat"}}
+    got = _unsupported_pose_claims(cal)
+    assert "shoulder_lift" not in got
+    assert "elbow_flex" not in got
+
+
+def test_with_no_witness_at_all_every_claim_is_unsupported():
+    from soarm_sdk.dashboard.panels.calibration import _unsupported_pose_claims
+
+    cal = _cal()
+    cal.notes = {}
+    assert set(_unsupported_pose_claims(cal)) == set(cal.names)
+
+
+def test_withdrawing_clears_the_label_but_not_the_zero():
+    """The claim is false; the number it labels may be perfectly good."""
+    j = JointCalibration("gripper", 1234.0, 1, 0, 4095, zero_source="reference_pose")
+    out = j.with_claim_withdrawn()
+    assert out.zero_source == "unknown"
+    assert out.zero_offset_ticks == j.zero_offset_ticks
+    assert out.direction_sign == j.direction_sign
+    assert (out.tick_min, out.tick_max) == (j.tick_min, j.tick_max)
+
+
+def test_withdrawal_only_ever_removes_a_claim():
+    """Downgrade-only, so it cannot launder a zero into looking verified."""
+    for source in ("travel_and_urdf_limits", "unknown", "manual_nudge",
+                   "manual_sign_flip"):
+        j = JointCalibration("a", 2048.0, 1, 0, 4095, zero_source=source)
+        assert j.with_claim_withdrawn().zero_source == source
+
+
+def test_withdrawing_unblocks_the_provenance_stage():
+    from soarm_sdk.calibration.pipeline import CalibrationPipeline, PipelineStage
+    from soarm_sdk.dashboard.panels.calibration import _unsupported_pose_claims
+
+    cal = _cal()
+    cal.notes = {"rezeroed_from_dashboard": {"pose": "folded_flat",
+                                             "joints": ["shoulder_lift", "elbow_flex"]}}
+    assert not CalibrationPipeline(cal).report().stage(
+        PipelineStage.ZERO_PROVENANCE).passed
+
+    for i, j in enumerate(cal.joints):
+        if j.name in _unsupported_pose_claims(cal):
+            cal.joints[i] = j.with_claim_withdrawn()
+
+    assert CalibrationPipeline(cal).report().stage(
+        PipelineStage.ZERO_PROVENANCE).passed
+
+
+def test_the_block_names_the_joint_and_the_pose_that_fails_it():
+    """The old wording read as though the provenance covered the gripper."""
+    from soarm_sdk.calibration.pipeline import CalibrationPipeline, PipelineStage
+
+    cal = _cal()
+    cal.notes = {"rezeroed_from_dashboard": {"pose": "folded_flat",
+                                             "joints": ["shoulder_lift", "elbow_flex"]}}
+    detail = CalibrationPipeline(cal).report().stage(
+        PipelineStage.ZERO_PROVENANCE).detail
+    assert "gripper" in detail
+    assert "folded_flat" in detail
+    assert "does not constrain" in detail
+    assert "incorrectly covers" not in detail
+
+
+def test_two_joints_can_never_earn_a_pose_claim():
+    """No shipped pose constrains them, so withdrawal is the only outcome."""
+    from soarm_sdk.calibration.reference import REFERENCE_POSES
+
+    coverable = set().union(*(set(p.covers) for p in REFERENCE_POSES.values()))
+    assert "gripper" not in coverable
+    assert "wrist_roll" not in coverable
+
+
+# -- the save gate has to be legible ------------------------------------
+
+
+class _MD:
+    def __init__(self):
+        self.content = ""
+
+
+def test_a_refused_save_reports_beside_the_button_not_only_at_the_top():
+    """Save is at the bottom; its reply went only to the top of the tab.
+
+    A refusal is five table rows naming what is still blocked, rendered
+    several screens above the button that produced it — so a refused save
+    looked exactly like a save that worked, and nothing reached disk.
+    """
+    from soarm_sdk.dashboard.panels.calibration import _do_save
+
+    cal = _cal()
+    cal.notes = {}  # nothing recorded: the pipeline cannot be ready
+    handles = {"status_md": [_MD()], "save_md": [_MD()]}
+    _do_save(_Ctx(cal), handles)
+
+    assert "Not saved" in handles["save_md"][0].content
+    assert "BLOCKED" in handles["save_md"][0].content
+    assert handles["save_md"][0].content == handles["status_md"][0].content
+
+
+def test_a_refused_save_writes_nothing_at_all(tmp_path):
+    """Not even a backup: the readiness gate runs before the copy."""
+    from soarm_sdk.dashboard.panels.calibration import _do_save
+
+    path = tmp_path / "calibration.json"
+    saved = _cal()
+    saved.notes = {}
+    saved.save(path)
+    before = path.read_bytes()
+
+    ctx = _Ctx(saved)
+    ctx.calibration_path = path
+    _do_save(ctx, {"status_md": [_MD()], "save_md": [_MD()]})
+
+    assert path.read_bytes() == before
+    assert list(tmp_path.glob("*.backup-*.json")) == []
+
+
+def test_a_multiline_message_is_not_wrapped_in_emphasis():
+    """`*<markdown table>*` renders as literal asterisks and broken rows."""
+    from soarm_sdk.dashboard.panels.calibration import _say
+
+    handles = {"status_md": [_MD()]}
+    _say(handles, "| a | b |\n|---|---|\n| 1 | 2 |")
+    assert not handles["status_md"][0].content.startswith("*")
+
+    _say(handles, "one liner")
+    assert handles["status_md"][0].content == "*one liner*"
+
+
+def test_a_successful_save_says_so_beside_the_button(tmp_path):
+    from soarm_sdk.calibration.pipeline import CalibrationPipeline
+    from soarm_sdk.dashboard.panels.calibration import _do_save
+
+    cal = _cal()
+    cal.notes = {
+        "acceptance_tolerances": {
+            "pose_repeatability_rad": 0.01,
+            "model_deviation_rad": 0.05,
+            "rom_endpoint_repeatability_ticks": 4,
+        },
+        "rom_endpoint_samples": {
+            n: [{"min": 10, "max": 4000}, {"min": 11, "max": 4001}] for n in cal.names
+        },
+        "rezeroed_from_dashboard": {
+            "pose": "folded_flat", "joints": ["shoulder_lift", "elbow_flex"],
+        },
+        "reference_pose_samples": [
+            {n: 2048 for n in cal.names}, {n: 2048 for n in cal.names},
+        ],
+    }
+    for i, j in enumerate(cal.joints):
+        if j.name not in ("shoulder_lift", "elbow_flex"):
+            cal.joints[i] = j.with_claim_withdrawn()
+    assert CalibrationPipeline(cal).report().ready, "fixture must be saveable"
+
+    path = tmp_path / "calibration.json"
+    ctx = _Ctx(cal)
+    ctx.calibration_path = path
+    handles = {"status_md": [_MD()], "save_md": [_MD()]}
+    _do_save(ctx, handles)
+
+    assert path.exists()
+    assert "Saved" in handles["save_md"][0].content
+
+
+def test_no_inner_folder_repeats_the_tab_number():
+    """The tab carries the number; repeating it inside reads as a sub-step."""
+
+    for tab in _tab_builders():
+        for title in _folder_titles(tab):
+            assert not re.match(r"Step \d", title), (tab, title)
+
+
+def test_each_tab_reports_its_own_rows_and_the_whole_record():
+    """The review has to answer 'did what I just did take?' locally."""
+    from soarm_sdk.calibration.pipeline import CalibrationPipeline
+    from soarm_sdk.dashboard.panels.calibration import TAB_STAGES, _format_stage
+
+    cal = _cal()
+    cal.notes = {}
+    report = CalibrationPipeline(cal).report()
+
+    per_tab = {t: _format_stage(report, st) for t, st in TAB_STAGES.items()}
+    # Signs pass on this fixture (validated=True); everything else blocks.
+    assert "complete" in per_tab["signs"]
+    for tab in ("tolerances", "travel", "zeros"):
+        assert "not complete" in per_tab[tab], tab
+    # A tab never reports another tab's failure as its own.
+    assert "acceptance tolerances" not in per_tab["travel"].lower()
+
+
+def test_a_tab_with_no_calibration_says_so_rather_than_claiming_success():
+    from soarm_sdk.dashboard.panels.calibration import TAB_STAGES, _format_stage
+
+    for stages in TAB_STAGES.values():
+        assert "Blocked" in _format_stage(None, stages)
+
+
+# -- travel evidence reaches the row that grades it ---------------------
+
+
+def _tol_cal():
+    from soarm_sdk.calibration.pipeline import AcceptanceTolerances
+
+    cal = _cal()
+    cal.notes = {
+        "acceptance_tolerances": AcceptanceTolerances(
+            pose_repeatability_rad=math.radians(0.5),
+            model_deviation_rad=math.radians(2.0),
+            rom_endpoint_repeatability_ticks=8,
+        ).to_dict()
+    }
+    return cal
+
+
+def _rom_passes(cal):
+    from soarm_sdk.calibration.pipeline import CalibrationPipeline, PipelineStage
+
+    return CalibrationPipeline(cal).report().stage(PipelineStage.ROM).passed
+
+
+def test_recording_travel_in_the_dashboard_feeds_the_row_that_grades_it():
+    """The control and its acceptance row were never connected.
+
+    The sweep wrote servo EEPROM and soarm100_rom.json; rom_endpoint_samples
+    was written only by the standalone soarm-calibrate-rom. So measuring
+    travel here left the ROM row BLOCKED however carefully it was done.
+    """
+    from soarm_sdk.dashboard.panels.calibration import _record_endpoints
+
+    cal = _tol_cal()
+    ctx = _Ctx(cal)
+    assert not _rom_passes(cal)
+
+    ends = {n: (800, 3400) for n in cal.names}
+    _record_endpoints(ctx, {}, ends, simulated=False)
+    assert not _rom_passes(cal), "one pass cannot prove repeatability"
+
+    _record_endpoints(ctx, {}, {n: (802, 3398) for n in cal.names}, simulated=False)
+    assert _rom_passes(cal)
+
+
+def test_a_simulated_sweep_is_recorded_but_never_accepted():
+    from soarm_sdk.dashboard.panels.calibration import _record_endpoints
+
+    cal = _tol_cal()
+    ctx = _Ctx(cal)
+    for _ in range(2):
+        _record_endpoints(ctx, {}, {n: (800, 3400) for n in cal.names}, simulated=True)
+    assert not _rom_passes(cal)
+
+
+def test_recording_travel_also_updates_the_joints_own_hard_stops():
+    """reachable_limits() is what ServoRobot clamps against; leaving it stale
+    while recording the evidence would be its own quiet disagreement."""
+    from soarm_sdk.dashboard.panels.calibration import _record_endpoints
+
+    cal = _tol_cal()
+    _record_endpoints(_Ctx(cal), {}, {"shoulder_pan": (900, 3100)}, simulated=False)
+    j = cal.joints[cal.names.index("shoulder_pan")]
+    assert (j.tick_min, j.tick_max) == (900, 3100)
+
+
+def test_endpoints_are_stored_lowest_first_whichever_way_they_were_swept():
+    from soarm_sdk.dashboard.panels.calibration import _record_endpoints
+
+    cal = _tol_cal()
+    _record_endpoints(_Ctx(cal), {}, {"shoulder_pan": (3100, 900)}, simulated=False)
+    j = cal.joints[cal.names.index("shoulder_pan")]
+    assert j.tick_min < j.tick_max
+
+
+def test_travel_does_not_disturb_the_zero():
+    """Hard stops are a fact about the mechanism, not about the zero."""
+    from soarm_sdk.dashboard.panels.calibration import _record_endpoints
+
+    cal = _tol_cal()
+    before = {j.name: (j.zero_offset_ticks, j.direction_sign) for j in cal.joints}
+    _record_endpoints(_Ctx(cal), {}, {n: (900, 3100) for n in cal.names}, False)
+    after = {j.name: (j.zero_offset_ticks, j.direction_sign) for j in cal.joints}
+    assert before == after
+
+
+def test_the_travel_report_names_what_is_still_missing():
+    from soarm_sdk.dashboard.panels.calibration import _format_rom, _record_endpoints
+
+    cal = _tol_cal()
+    assert "No travel passes yet" in _format_rom(cal)
+
+    _record_endpoints(_Ctx(cal), {}, {n: (800, 3400) for n in cal.names}, False)
+    assert "needs another pass" in _format_rom(cal)
+
+    _record_endpoints(_Ctx(cal), {}, {n: (802, 3398) for n in cal.names}, False)
+    out = _format_rom(cal)
+    assert "repeatable to 2 ticks" in out
+    assert "needs another pass" not in out
+
+
+def test_both_sweep_modes_publish_their_endpoints():
+    """Manual and automatic both funnel through one callback, so neither can
+    quietly skip recording."""
+    from soarm_sdk.dashboard.panels import setup
+
+    src = inspect.getsource(setup._build_homing)
+    assert src.count("_publish_endpoints(") == 3  # definition + both modes
+
+
+def test_the_manual_recorder_shows_a_live_reading():
+    """Recording a hard stop by hand means pushing until the number stops
+    moving, which you cannot do if the number is not on screen."""
+    from soarm_sdk.dashboard.panels import setup
+
+    src = inspect.getsource(setup._build_homing)
+    assert "man_live_md" in src
+    assert '"homing_tick"' in src
+
+
+def test_a_wrapped_joint_is_named_and_sent_to_recentre_not_to_the_zero():
+    """3974 → 4095 → 0 → 3612 is one continuous motion that min/max reads as
+    a full turn. No value of the calibration zero removes the discontinuity;
+    the servo's homing offset has to move."""
+    from soarm_sdk.dashboard.panels.calibration import _format_rom
+
+    cal = _cal()
+    cal.notes = {
+        "rom_endpoint_samples": {
+            n: [{"min": 0, "max": 4095, "simulated": False}] for n in cal.names
+        }
+    }
+    out = _format_rom(cal)
+    assert "4095/0 wrap" in out
+    assert "encoder's range" in out
+    assert "--recentre" in out
+    assert "no calibration zero can fix it" in out
+    assert "before" in out and "tab 4" in out
+
+
+def test_a_normal_span_is_not_called_a_wrap():
+    from soarm_sdk.dashboard.panels.calibration import _format_rom
+
+    cal = _cal()
+    cal.notes = {
+        "rom_endpoint_samples": {
+            n: [{"min": 800, "max": 3400, "simulated": False}] * 2
+            for n in cal.names
+        }
+    }
+    assert "encoder turn" not in _format_rom(cal)
+
+
+def test_the_travel_tab_says_it_overrides_the_urdf_once_accepted():
+    from soarm_sdk.dashboard.panels import calibration
+
+    src = inspect.getsource(calibration._build_rom)
+    assert "replaces" in src and "URDF" in src
+
+
+def test_the_zeros_tab_states_why_travel_comes_first():
+    """The dependency is not obvious: a zero does not need the travel, but a
+    re-centre rewrites the ticks the zero is pinned to."""
+    from soarm_sdk.dashboard.panels import calibration
+
+    src = inspect.getsource(calibration._tab_zeros)
+    assert "Do tab 3 first" in src or "Do tab 3 first" in src.replace("**", "")
+    assert "rewrites the raw ticks" in src
+
+
+# -- a lab note is for the file, not the screen -------------------------
+
+
+REAL_NOTE = (
+    "hard-stop direction check, 2026-09-12: torque released, each of "
+    "shoulder_pan, shoulder_lift, elbow_flex, wrist_flex and wrist_roll "
+    "pushed by hand into a named mechanical stop and the landing end read "
+    "from the encoder (all landed within 1-3% of the measured stop). "
+    "| ZEROS RE-MEASURED 2026-09-12 by inclinometer: with the pitch axes "
+    "parallel, each member pitch is a linear function of its upstream joints."
+)
+
+
+def test_a_long_provenance_note_is_reduced_to_its_headline():
+    """This arm's validated_by is 956 characters — longer than every other
+    word on the tab put together. It is a lab record; the file is where a
+    lab record belongs."""
+    from soarm_sdk.dashboard.panels.calibration import _format_signs
+
+    cal = _cal()
+    cal.mark_validated(REAL_NOTE)
+    out = _format_signs(cal)
+    assert len(out) < 200, out
+    assert "hard-stop direction check" in out
+    assert "inclinometer" not in out
+    assert "calibration file" in out
+
+
+def test_notes_joined_with_a_pipe_are_counted_not_concatenated():
+    """Two unrelated records share this field — a sign check and a zero
+    re-measurement. Running them together read as one sentence about
+    neither."""
+    from soarm_sdk.dashboard.panels.calibration import _note_headline
+
+    head, extra = _note_headline(REAL_NOTE)
+    assert head == "hard-stop direction check, 2026-09-12"
+    assert extra == "+1 more note"
+
+
+def test_the_date_is_not_printed_twice():
+    from soarm_sdk.dashboard.panels.calibration import _format_signs
+
+    cal = _cal()
+    cal.mark_validated("hard-stop direction check, 2026-09-12")
+    cal.notes["validated_at"] = "2026-09-12T08:42:15+00:00"
+    assert _format_signs(cal).count("2026-09-12") == 1
+
+
+def test_a_short_note_is_shown_whole():
+    from soarm_sdk.dashboard.panels.calibration import _note_headline
+
+    head, extra = _note_headline("jogged each joint and watched the mirror")
+    assert head == "jogged each joint and watched the mirror"
+    assert extra == ""
+
+
+def test_a_long_single_note_says_it_was_truncated():
+    from soarm_sdk.dashboard.panels.calibration import _note_headline
+
+    head, extra = _note_headline("x" * 300)
+    assert len(head) <= 84
+    assert extra == "truncated"
+
+
+def test_no_note_at_all_is_not_an_error():
+    from soarm_sdk.dashboard.panels.calibration import _note_headline
+
+    assert _note_headline(None) == ("", "")
+    assert _note_headline("   ") == ("", "")
+
+
+# -- suggested tolerances are a form default, not a fallback ------------
+
+
+def test_the_tolerance_fields_start_at_the_suggested_values():
+    from soarm_sdk.dashboard.panels import calibration as C
+
+    assert C.DEFAULT_POSE_REPEATABILITY_DEG == 3.0
+    assert C.DEFAULT_MODEL_DEVIATION_DEG == 3.0
+    assert C.DEFAULT_ROM_REPEATABILITY_TICKS == 30.0
+
+    src = inspect.getsource(C._build_acceptance)
+    for name in ("DEFAULT_POSE_REPEATABILITY_DEG", "DEFAULT_MODEL_DEVIATION_DEG",
+                 "DEFAULT_ROM_REPEATABILITY_TICKS"):
+        assert f"initial_value={name}" in src, name
+
+
+def test_the_suggested_values_are_valid_tolerances():
+    """A pre-filled form that cannot be submitted is worse than an empty one."""
+    from soarm_sdk.calibration.pipeline import AcceptanceTolerances
+    from soarm_sdk.dashboard.panels import calibration as C
+
+    t = AcceptanceTolerances(
+        pose_repeatability_rad=math.radians(C.DEFAULT_POSE_REPEATABILITY_DEG),
+        model_deviation_rad=math.radians(C.DEFAULT_MODEL_DEVIATION_DEG),
+        rom_endpoint_repeatability_ticks=int(C.DEFAULT_ROM_REPEATABILITY_TICKS),
+    )
+    assert t.rom_endpoint_repeatability_ticks == 30
+
+
+def test_an_unrecorded_calibration_still_has_no_tolerances():
+    """The form default must not become a fallback: code that reads the file
+    has to keep seeing 'nobody approved a threshold'."""
+    from soarm_sdk.calibration.pipeline import AcceptanceTolerances, CalibrationPipeline, PipelineStage
+
+    cal = _cal()
+    cal.notes = {}
+    assert AcceptanceTolerances.from_notes(cal.notes) is None
+    stage = CalibrationPipeline(cal).report().stage(PipelineStage.ACCEPTANCE)
+    assert not stage.passed
+
+
+def test_a_recorded_tolerance_still_wins_over_the_suggestion():
+    """Reopening the tab must show this arm's approved numbers, not the form's."""
+    from soarm_sdk.dashboard.panels import calibration as C
+
+    src = inspect.getsource(C._build_acceptance)
+    assert "AcceptanceTolerances.from_notes(cal.notes)" in src
+    assert src.index("from_notes") > src.index("initial_value=DEFAULT_POSE")
+
+
+# -- Step 2 defaults to "already correct" --------------------------------
+
+
+def test_the_sign_dropdowns_default_to_correct_not_unchecked():
+    """Every joint's assumed sign (DEFAULT_DIRECTION_SIGN_OVERRIDES) is
+    expected to check out now, wrist_roll included — a physical check
+    confirming the assumption is still required before Confirm accepts, but
+    the operator no longer has to touch six controls that are each expected
+    to read the same way.
+
+    This trades away the guard that forced a look at each dropdown: Confirm
+    can now be pressed with nothing touched and will still record "physical
+    direction-sign check recorded". Deliberate per an explicit request, not
+    an oversight — flagged here so it reads as a decision if it changes."""
+    from soarm_sdk.dashboard.panels import calibration as C
+
+    src = inspect.getsource(C._build_signs)
+    assert "initial_value=SIGN_OK" in src
+    assert "initial_value=SIGN_UNCHECKED" not in src

@@ -8,6 +8,8 @@ Two entry points, sharing the same panel-building code:
 - :func:`main_setup` (``soarm-dashboard-setup``) — just the "bring a fresh
   arm online" panels (Start Up, Homing Wizard, Reconfigure), for initial
   hardware setup without the day-to-day operation tabs.
+- :func:`main_calibration` (``soarm-dashboard-calibration``) — the guided
+  URDF-frame calibration and acceptance workflow.
 
 Built entirely on :mod:`soarm_sdk.dashboard` — add a new tab by writing a
 ``build_*_panel()`` function there rather than forking this module.
@@ -99,7 +101,6 @@ def main(argv: Optional[list] = None) -> None:
 
     for panel in setup.build_all(fk_update_fn=app.fk_update):
         app.register(panel)
-    app.register(calibration.build_calibration_panel())
     app.register(command.build_command_panel())
     app.register(pid.build_pid_panel())
     app.register(monitor.build_monitor_panel())
@@ -126,9 +127,29 @@ def main_setup(argv: Optional[list] = None) -> None:
     )
     for panel in setup.build_all(fk_update_fn=app.fk_update):
         app.register(panel)
-    # A fresh arm is precisely when the zeros are wrong, so this belongs in
-    # the setup-only dashboard too, not just the full one.
-    app.register(calibration.build_calibration_panel())
+    app.run()
+
+
+def main_calibration(argv: Optional[list] = None) -> None:
+    """Dedicated Viser workflow for ROM, zero, provenance, and acceptance."""
+    parser = _build_parser("soarm_sdk calibration dashboard")
+    args = parser.parse_args(argv)
+    device = _resolve_device(args, "soarm-dashboard-calibration")
+    app = DashboardApp(
+        title="soarm_sdk — Calibration",
+        port=args.port,
+        device=device,
+        baud=args.baud,
+        interval_ms=args.interval_ms,
+        urdf_path=args.urdf,
+        use_stream=args.stream,
+        calibration_path=args.calibration,
+    )
+    app.register(setup.build_startup_panel())
+    for panel in calibration.build_calibration_panels(
+        fk_update_fn=app.fk_update, ghost_fn=app.show_ghost
+    ):
+        app.register(panel)
     app.run()
 
 
