@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`soarm-dashboard-setup` now loads every tab** (Start Up, Homing Wizard,
+  Reconfigure, Command Panel, PID Tuning, Monitor, Recorder) — what the
+  bare `soarm-dashboard` script used to load. That bare script is removed:
+  every dashboard now has its own named script (`soarm-dashboard-setup`,
+  `soarm-dashboard-calibration`), so there is no default you have to
+  already know about to reach. `examples/viser_dashboard.py` is likewise
+  replaced by `examples/setup_dashboard.py` and the new
+  `examples/calibration_dashboard.py`, one per script, for running from a
+  checkout without installing.
+
 - **The Calibration tab is now four tabs, worked in order, not one tab of
   six stacked folders.** *Tolerances*, *Signs*, *Travel*, *Zeros* — split by
   which acceptance row each owns (`TAB_STAGES`), each ending in its own
@@ -184,7 +194,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dependency — it is the new `[telemetry]` extra, imported at construction.
 
 - **The dashboard can consume the telemetry stream instead of polling**
-  (`soarm-dashboard --stream`, off by default while it beds in). One
+  (`soarm-dashboard-setup --stream`, off by default while it beds in). One
   `ServoHardwareInterface` holds the port open and the dashboard drains its
   samples, which removes the two costs the legacy loop paid every cycle:
   reopening the serial port each iteration, and twelve per-servo round trips

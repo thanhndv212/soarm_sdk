@@ -1,28 +1,29 @@
 """Viser dashboard for soarm_sdk: robot control + real-time 3-D visualisation.
 
-Three console scripts, one per :class:`~soarm_sdk.dashboard.app.DashboardProfile`
+Two console scripts, one per :class:`~soarm_sdk.dashboard.app.DashboardProfile`
 in :data:`PROFILES`, sharing the same panel-building code:
 
-- ``soarm-dashboard`` (:func:`main`, profile ``"full"``) — the full operator
-  dashboard: Start Up, Homing Wizard, Reconfigure, Command Panel, PID
-  Tuning, Monitor, Recorder.
-- ``soarm-dashboard-setup`` (:func:`main_setup`, profile ``"setup"``) — just
-  the "bring a fresh arm online" panels (Start Up, Homing Wizard,
-  Reconfigure), for initial hardware setup without the day-to-day
-  operation tabs.
+- ``soarm-dashboard-setup`` (:func:`main_setup`, profile ``"setup"``) — every
+  tab: Start Up, Homing Wizard, Reconfigure, Command Panel, PID Tuning,
+  Monitor, Recorder. The one dashboard for bringing an arm up and running
+  it day to day.
 - ``soarm-dashboard-calibration`` (:func:`main_calibration`, profile
   ``"calibration"``) — the guided URDF-frame calibration and acceptance
   workflow.
 
+Every dashboard has its own named script; there is deliberately no bare
+"just launch something" entry point, so a profile is always the one you
+asked for, not a default you have to already know about.
+
 Built entirely on :mod:`soarm_sdk.dashboard` — add a new tab by writing a
 ``build_*_panel()`` function there, or a new profile by adding an entry to
-``PROFILES``, rather than forking this module.
+``PROFILES`` plus a thin ``main_*``, rather than forking this module.
 
 Launch
 ------
-    soarm-dashboard [--device /dev/ttyXXX] [--baud 1000000] \\
+    soarm-dashboard-setup [--device /dev/ttyXXX] [--baud 1000000] \\
         [--port 8080] [--urdf PATH] [--interval-ms 200]
-    soarm-dashboard-setup [same flags]
+    soarm-dashboard-calibration [same flags]
 """
 
 from __future__ import annotations
@@ -87,18 +88,13 @@ def _resolve_device(args: argparse.Namespace, label: str) -> str:
     return device
 
 
-def _register_full(app: DashboardApp) -> None:
+def _register_setup(app: DashboardApp) -> None:
     for panel in setup.build_all(fk_update_fn=app.fk_update):
         app.register(panel)
     app.register(command.build_command_panel())
     app.register(pid.build_pid_panel())
     app.register(monitor.build_monitor_panel())
     app.register(recorder.build_recorder_panel())
-
-
-def _register_setup(app: DashboardApp) -> None:
-    for panel in setup.build_all(fk_update_fn=app.fk_update):
-        app.register(panel)
 
 
 def _register_calibration(app: DashboardApp) -> None:
@@ -113,17 +109,11 @@ def _register_calibration(app: DashboardApp) -> None:
 #: field-ops dashboard — is a new key here plus a new thin ``main_*``, not a
 #: new hand-assembled panel list.
 PROFILES: Dict[str, DashboardProfile] = {
-    "full": DashboardProfile(
-        name="full",
-        title="soarm_sdk Dashboard",
-        register=_register_full,
-        description="Viser dashboard for soarm_sdk",
-    ),
     "setup": DashboardProfile(
         name="setup",
-        title="soarm_sdk — Hardware Setup",
+        title="soarm_sdk Dashboard",
         register=_register_setup,
-        description="soarm_sdk hardware setup dashboard",
+        description="soarm_sdk dashboard: setup + command + PID + monitor + recorder",
     ),
     "calibration": DashboardProfile(
         name="calibration",
@@ -153,13 +143,8 @@ def _launch(profile: DashboardProfile, argv: Optional[list], log_label: str) -> 
     app.run()
 
 
-def main(argv: Optional[list] = None) -> None:
-    """Full operator dashboard: setup + command + PID + monitor + recorder."""
-    _launch(PROFILES["full"], argv, "soarm-dashboard")
-
-
 def main_setup(argv: Optional[list] = None) -> None:
-    """Hardware-setup-only dashboard: Start Up, Homing Wizard, Reconfigure."""
+    """Every tab: setup + command + PID + monitor + recorder."""
     _launch(PROFILES["setup"], argv, "soarm-dashboard-setup")
 
 
@@ -169,4 +154,4 @@ def main_calibration(argv: Optional[list] = None) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main_setup()

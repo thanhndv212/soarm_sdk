@@ -49,7 +49,6 @@ telemetry = [
 
 [project.scripts]
 soarm-calibrate = "soarm_sdk.cli.calibrate:main"
-soarm-dashboard = "soarm_sdk.cli.dashboard:main"
 soarm-dashboard-setup = "soarm_sdk.cli.dashboard:main_setup"
 soarm-dashboard-calibration = "soarm_sdk.cli.dashboard:main_calibration"
 soarm-seed-calibration = "soarm_sdk.calibration.seed:main"
