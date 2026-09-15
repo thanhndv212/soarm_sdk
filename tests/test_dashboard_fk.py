@@ -182,3 +182,25 @@ def test_posing_without_a_urdf_is_a_no_op_not_a_crash():
     from soarm_sdk.dashboard.fk import pose_meshes
 
     pose_meshes(None, {"a": 0.0}, {})  # must not raise
+
+
+def test_dashboard_app_has_a_ghost_fk_update_distinct_from_the_live_one():
+    """A manifest player and the live-poll loop used to drive the same mesh
+    through the same fk_update, so animating a preview fought the live
+    arm's own position for the same pixels every tick. fk_update_ghost is
+    the independent twin that removes the race instead of arbitrating it."""
+    import inspect
+
+    from soarm_sdk.dashboard.app import DashboardApp
+
+    assert hasattr(DashboardApp, "fk_update_ghost")
+    src = inspect.getsource(DashboardApp.fk_update_ghost)
+    assert "self._ghost_handles" in src
+    assert "self._mesh_handles" not in src
+
+
+def test_ghost_fk_update_is_a_noop_without_a_urdf():
+    from soarm_sdk.dashboard.app import DashboardApp
+
+    app = DashboardApp(title="no urdf", port=8097)
+    app.fk_update_ghost({1: 2048})  # must not raise

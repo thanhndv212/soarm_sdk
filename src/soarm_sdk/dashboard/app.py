@@ -201,6 +201,38 @@ class DashboardApp:
         for handle in self._ghost_handles.values():
             handle.visible = bool(cfg)
 
+    def fk_update_ghost(self, positions: Dict[int, int]) -> None:
+        """Pose the ghost from servo ticks, through the same calibrated FK
+        :meth:`fk_update` uses for the live mirror — the tick-driven twin of
+        :meth:`show_ghost`, which only takes an explicit joint-radians pose.
+
+        For animating a planned path onto the ghost while the live mirror
+        keeps showing wherever the real arm actually is: a manifest player
+        and the live-poll loop used to both drive the *same* mesh through
+        the same ``fk_update``, so playing a preview fought the live arm's
+        own position for the same pixels every tick. Two independent mesh
+        sets — this one, plus whatever still calls :meth:`fk_update` — removes
+        the race instead of arbitrating it.
+
+        No-op if no URDF was loaded. Reveals the ghost on first use; call
+        :meth:`show_ghost` with ``None`` to hide it again.
+        """
+        if self.urdf is None or not self._ghost_handles:
+            return
+        try:
+            update_fk(
+                self.urdf,
+                positions,
+                self._ghost_handles,
+                joint_ids=list(self.ctx.joint_ids),
+                calibration=self.ctx.calibration,
+            )
+        except Exception:
+            logger.exception("[soarm_sdk.dashboard] ghost FK update failed")
+            return
+        for handle in self._ghost_handles.values():
+            handle.visible = True
+
     def run(self) -> None:
         """Build all registered panels as tabs, then block.
 
@@ -219,7 +251,16 @@ class DashboardApp:
 
         try:
             while True:
-                if self.urdf is not None:
+                # Gated on ctx.polling, not just "urdf loaded": whoever calls
+                # ctx.stop_polling() (capture_start, ExecutionJob) is taking
+                # over the mirror mesh for the duration — ExecutionJob drives
+                # it itself from the live command trace. Without this gate,
+                # this loop kept pushing ctx.state.positions regardless, which
+                # a stopped poll thread leaves frozen at whatever it was when
+                # polling stopped. Every ~100ms that stale pose overwrote
+                # whatever the execution follower had just drawn, and the
+                # mirror visibly snapped back and forth between the two.
+                if self.urdf is not None and self.ctx.polling:
                     with self.ctx.lock:
                         positions = dict(self.ctx.state.positions)
                     if positions:
