@@ -3,9 +3,13 @@
 Installing the package (``pip install soarm-sdk``) provides these on
 ``$PATH`` directly — see ``[project.scripts]`` in ``pyproject.toml``:
 
-- ``soarm-calibrate`` — servo EEPROM calibration CLI + interactive UI.
-- ``soarm-dashboard`` / ``soarm-dashboard-setup`` — the Viser dashboard.
-- ``soarm-seed-calibration`` — seed a URDF-frame calibration offline.
+- ``soarm-reconfigure`` — servo EEPROM configuration CLI + interactive UI
+  (IDs, angle limits, speed, torque, baud). Not the tick<->URDF-frame
+  calibration below, despite the similar name this module used to have.
+- ``soarm-dashboard-setup`` — every Viser dashboard tab: setup, command,
+  PID, monitor, recorder.
+- ``soarm-dashboard-calibration`` — the guided, on-hardware tick<->URDF-frame
+  calibration workflow.
 
 Each also has a matching thin script under ``examples/`` for anyone
 running from a checkout without installing the package.

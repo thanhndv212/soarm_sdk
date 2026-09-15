@@ -1,4 +1,10 @@
-"""Interactive + scriptable servo calibration CLI for soarm_sdk.
+"""Interactive + scriptable servo reconfiguration CLI for soarm_sdk.
+
+Named ``soarm-reconfigure``, not ``soarm-calibrate``: everything here writes
+servo EEPROM registers (IDs, angle limits, speed, torque, baud) — a
+different thing from :mod:`soarm_sdk.calibration`'s tick<->URDF-frame
+mapping, despite both once sharing the word "calibration". See
+:mod:`soarm_sdk.calibration` for that distinction.
 
 Features
 --------
@@ -11,7 +17,7 @@ Features
 Example
 -------
 ```bash
-soarm-calibrate \
+soarm-reconfigure \
     --device /dev/ttyUSB0 --scan-range 1-6 \
     --assign-id 1:11 --assign-id 2:12 \
     --angle-limit 11:100:4000 --angle-limit 12:200:3800 \
@@ -19,9 +25,9 @@ soarm-calibrate \
     --torque 11:on --lock
 ```
 
-All calibration logic lives in :mod:`soarm_sdk.bus` (servo EEPROM
-configuration) and :mod:`soarm_sdk.bus.discovery` (port/servo discovery).
-This module adds the interactive text-based UI and argparse wiring on top.
+All the logic lives in :mod:`soarm_sdk.bus` (servo EEPROM configuration)
+and :mod:`soarm_sdk.bus.discovery` (port/servo discovery). This module adds
+the interactive text-based UI and argparse wiring on top.
 """
 
 from __future__ import annotations
@@ -297,7 +303,7 @@ def launch_ui() -> int:
         lock=defaults.lock,
     )
 
-    print("Interactive soarm_sdk calibration UI")
+    print("Interactive soarm_sdk servo reconfiguration UI")
     print("-" * 36)
 
     while True:
@@ -317,7 +323,7 @@ def launch_ui() -> int:
             "  U) Toggle EEPROM unlock\n"
             "  L) Toggle EEPROM lock\n"
             "  P) List serial ports\n"
-            "  R) Run calibration\n"
+            "  R) Apply configuration\n"
             "  Q) Quit\n"
         )
         choice = (_safe_input("Select an option: ") or "").strip().lower()
@@ -364,7 +370,7 @@ def launch_ui() -> int:
             except RuntimeError as exc:
                 print(f"\n  Runtime error: {exc}")
             else:
-                print("\n  Calibration run complete.")
+                print("\n  Configuration applied.")
             _safe_input("Press Enter to return to the menu...")
         elif choice in {"q", "x"}:
             if _prompt_bool("Exit the UI?", True):
@@ -379,7 +385,7 @@ def launch_ui() -> int:
 
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Calibrate soarm_sdk devices connected to a serial bus.",
+        description="Reconfigure soarm_sdk servos connected to a serial bus.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--device", default="/dev/ttyUSB0", help="Serial port path")
@@ -401,9 +407,9 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--set-baud", action="append", default=[], metavar="ID:BAUD_CODE",
                         help="Set the baud-rate register (soarm_sdk-specific encoding).")
     parser.add_argument("--unlock", action="store_true",
-                        help="Unlock servo EEPROM before applying calibration changes.")
+                        help="Unlock servo EEPROM before applying changes.")
     parser.add_argument("--lock", action="store_true",
-                        help="Lock servo EEPROM after applying calibration changes.")
+                        help="Lock servo EEPROM after applying changes.")
     parser.add_argument("--list-ports", action="store_true",
                         help="List detected serial ports before connecting.")
     parser.add_argument("--ui", action="store_true",
@@ -420,7 +426,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.list_ports:
         # A query, not a modifier: print and stop. Falling through ran a
-        # full calibration afterwards, which opened --device (default
+        # full reconfiguration afterwards, which opened --device (default
         # /dev/ttyUSB0) and raised SerialException on any machine that
         # simply wanted to know which ports exist -- and printed the port
         # list twice on the way, since run_calibration prints it again for

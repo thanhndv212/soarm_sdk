@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`soarm-calibrate` renamed to `soarm-reconfigure`.** It has never
+  touched the tick↔URDF-frame calibration this package's *other*
+  `soarm-*calibrat*` commands do — it writes servo EEPROM registers (IDs,
+  angle limits, speed, torque, baud), the same operation as the
+  dashboard's Reconfigure tab — but sharing the word "calibrate" with
+  them read as if it did. The module moved with it:
+  `soarm_sdk.cli.calibrate` → `soarm_sdk.cli.reconfigure`.
+
 ### Added
 
 - **`soarm-dashboard-setup` now loads every tab** (Start Up, Homing Wizard,
@@ -301,18 +311,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `calibrate` skill's procedure cites the tab's step numbers per stage,
   and documents the optional nudge it had omitted.
 
-- **One launcher for the calibration CLIs.** `examples/` carried
-  `calibrate.py` and `calibrate_arm.py`, two near-identical `sys.path`
-  shims whose names gave no hint that they start unrelated tools — one
-  configures servos on the wire (IDs, EEPROM angle limits, speed), the
-  other drives the joints into their hard stops and writes the arm's
-  URDF-frame calibration. They are now named modes of a single
-  `examples/calibrate.py`: `bus` and `rom`. The mode is spliced into
-  `sys.argv[0]` before dispatch, so each tool's own `--help` advertises a
-  command line that works. Seeding offline stays out of it:
-  `soarm_sdk.calibration.seed.main()` takes no argv, so it does not
-  forward cleanly — `soarm-seed-calibration` remains its entry point.
-
 ### Fixed
 
 - **`ReadLoad` and `ReadCurrent` truncated their registers.** Both issued
@@ -357,13 +355,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only sync-read group was 4 bytes wide, and the parser returns whole blocks
   or nothing.
 
-- **`soarm-calibrate --list-ports` ran a calibration afterwards.** The flag
+- **`soarm-reconfigure --list-ports` ran a reconfiguration afterwards.**
+  (Named `soarm-calibrate` at the time this was fixed.) The flag
   is a query, but `main()` printed the ports and then fell through into
   `run_calibration()`, which opens `--device` — default `/dev/ttyUSB0` —
   and raised `SerialException` on any machine that only wanted to know
   which ports exist. The list also printed twice, since `run_calibration`
   prints it again for callers that pass the flag in a `Namespace`. It now
-  prints once and returns 0. Covered by `tests/test_calibrate_cli.py`,
+  prints once and returns 0. Covered by `tests/test_reconfigure_cli.py`,
   which also pins that the early return is scoped to the flag and that a
   bad configuration still exits 2 with a message rather than a traceback.
 - **The enforced joint limits were in the wrong frame for two joints, and
@@ -446,7 +445,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the raw sweep under `notes["sweep"]`, flags any direction that timed out
   instead of stalling, and — like the seeding CLI — writes
   `validated: false`, because a travel range still cannot settle the
-  direction signs. `examples/calibrate.py rom` runs it from a checkout.
+  direction signs. `examples/calibrate_rom.py` runs it from a checkout.
 - **`seed_from_travel(direction_signs=...)`** — seed a joint whose direction
   has actually been measured. The sign is not a cosmetic flag over the same
   zero: it decides which end of the measured travel is the URDF's *lower*
