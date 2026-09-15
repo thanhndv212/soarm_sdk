@@ -207,6 +207,54 @@ class JointCalibration:
             f"but the servo now reads ({live_min_ticks}, {live_max_ticks})"
         )
 
+    def with_zero_pinned_to_current_tick(self, tick: float) -> "JointCalibration":
+        """Set the zero to wherever the joint is *right now* — not a pose.
+
+        For a joint no shipped reference pose constrains (this arm's
+        ``wrist_roll`` and ``gripper``): there is nothing to re-zero it
+        *against*. What this fixes is a narrower, still-real problem — a
+        zero that sits outside the joint's own recorded
+        ``tick_min..tick_max`` is self-contradictory (it claims a tick the
+        travel says the joint never reaches means zero radians), and
+        ``reachable_rad`` still computes an answer from it, one with no
+        physical meaning. Pinning to the current tick at least makes the
+        zero consistent with the joint's own measured travel.
+
+        ``zero_source`` records this honestly as ``pinned_to_current_tick``,
+        never ``reference_pose`` — the acceptance pipeline's provenance
+        check exists specifically to catch a zero claiming evidence it
+        does not have, and this would be exactly that claim.
+        """
+        return replace(self, zero_offset_ticks=float(tick),
+                        zero_source="pinned_to_current_tick")
+
+    def rebased_after_offset_change(self, delta_ticks: float) -> "JointCalibration":
+        """Copy of this joint after the servo's own EEPROM homing offset moved.
+
+        ``STS_OFS`` is applied by the servo firmware before soarm_sdk ever
+        sees a tick: ``reported = raw - STS_OFS``
+        (:mod:`soarm_sdk.calibration.recentre`). Move that register by
+        *delta_ticks* and the *same physical position* now reports
+        ``old_reported - delta_ticks`` — stepping the register by +100
+        moves every reported position by -100. Every tick this calibration
+        already knows about — the zero and the measured hard stops — has
+        to move by the same amount to keep meaning the same physical
+        position, or a re-centre silently invalidates all of them at once,
+        with nothing to say so.
+
+        ``zero_source`` becomes ``rebased_after_recentre``: the arithmetic
+        preserves whatever the old tick meant, it does not newly verify
+        it. A joint that was pose-anchored before still needs a fresh pose
+        check after — the pose is expressed in ticks too.
+        """
+        return replace(
+            self,
+            zero_offset_ticks=self.zero_offset_ticks - delta_ticks,
+            tick_min=int(round(self.tick_min - delta_ticks)),
+            tick_max=int(round(self.tick_max - delta_ticks)),
+            zero_source="rebased_after_recentre",
+        )
+
     def with_claim_withdrawn(self) -> "JointCalibration":
         """Copy whose zero stops claiming a reference-pose witness.
 

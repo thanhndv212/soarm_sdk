@@ -315,6 +315,69 @@ def test_direction_signs_are_validated():
         seed_from_travel(["a"], [(-1.0, 1.0)], [(0, 100)], direction_signs=[0])
 
 
+def test_rebasing_preserves_the_physical_position_the_zero_meant():
+    """+100 to STS_OFS moves every REPORTED position by -100 (recentre.py's
+    own finding); the calibration's zero has to move the same way to keep
+    pointing at the same physical spot."""
+    from soarm_sdk.calibration.frame import JointCalibration
+
+    j = JointCalibration("wrist_roll", 2074.0, 1, 102, 3993,
+                          zero_source="manual_sign_flip")
+    out = j.rebased_after_offset_change(delta_ticks=-1832.0)
+    assert out.zero_offset_ticks == 2074.0 + 1832.0
+    assert out.zero_source == "rebased_after_recentre"
+
+
+def test_rebasing_moves_the_hard_stops_by_the_same_amount():
+    from soarm_sdk.calibration.frame import JointCalibration
+
+    j = JointCalibration("a", 2000.0, 1, 500, 3500)
+    out = j.rebased_after_offset_change(delta_ticks=200.0)
+    assert (out.tick_min, out.tick_max) == (300, 3300)
+    assert out.zero_offset_ticks == 1800.0
+
+
+def test_rebasing_by_zero_is_the_identity_except_provenance():
+    from soarm_sdk.calibration.frame import JointCalibration
+
+    j = JointCalibration("a", 2000.0, 1, 500, 3500, zero_source="reference_pose")
+    out = j.rebased_after_offset_change(0.0)
+    assert (out.zero_offset_ticks, out.tick_min, out.tick_max) == (2000.0, 500, 3500)
+    assert out.zero_source == "rebased_after_recentre"
+
+
+def test_rebasing_does_not_touch_the_direction_sign():
+    from soarm_sdk.calibration.frame import JointCalibration
+
+    j = JointCalibration("a", 2000.0, -1, 500, 3500)
+    assert j.rebased_after_offset_change(50.0).direction_sign == -1
+
+
+def test_pinning_to_the_current_tick_makes_it_read_as_zero():
+    from soarm_sdk.calibration.frame import JointCalibration
+
+    j = JointCalibration("wrist_roll", 6153.9, 1, 1, 4095, zero_source="manual_nudge")
+    out = j.with_zero_pinned_to_current_tick(1418.0)
+    assert out.to_rad(1418.0) == 0.0
+    assert out.zero_source == "pinned_to_current_tick"
+
+
+def test_pinning_to_current_tick_never_claims_a_pose():
+    from soarm_sdk.calibration.frame import JointCalibration
+
+    j = JointCalibration("a", 2000.0, 1, 0, 4095, zero_source="reference_pose")
+    assert j.with_zero_pinned_to_current_tick(500.0).zero_source != "reference_pose"
+
+
+def test_pinning_to_current_tick_does_not_touch_sign_or_travel():
+    from soarm_sdk.calibration.frame import JointCalibration
+
+    j = JointCalibration("a", 2000.0, -1, 100, 3000)
+    out = j.with_zero_pinned_to_current_tick(1500.0)
+    assert out.direction_sign == -1
+    assert (out.tick_min, out.tick_max) == (100, 3000)
+
+
 # -- EEPROM limit tracking ------------------------------------------------
 #
 # The gap this closes: wrist_flex's servo capped at 3046 ticks while the

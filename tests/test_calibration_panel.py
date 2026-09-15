@@ -7,9 +7,12 @@ calibration file*, and those are ordinary functions over ordinary data.
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import math
 import re
+import threading
+import types
 
 import pytest
 
@@ -1568,3 +1571,210 @@ def test_the_sign_dropdowns_default_to_correct_not_unchecked():
     src = inspect.getsource(C._build_signs)
     assert "initial_value=SIGN_OK" in src
     assert "initial_value=SIGN_UNCHECKED" not in src
+
+
+# -- recentre a wrapped joint --------------------------------------------
+
+
+def _build_rom_stub(cal, joint_ids=(1, 2, 3, 4, 5, 6)):
+    """A minimal stub GUI good enough to drive _build_rom's Recentre control."""
+    class _H:
+        def __init__(self, **kw):
+            self.content = ""
+            self.value = kw.get("initial_value", 0.0)
+            self.options = []
+
+        def on_click(self, fn):
+            self._click = fn
+            return fn
+
+        def on_update(self, fn):
+            return fn
+
+    class _Folder:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    class _Gui:
+        def __init__(self):
+            self.buttons = {}
+            self.markdowns = []
+
+        def add_markdown(self, x=""):
+            h = _H()
+            h.content = x
+            self.markdowns.append(h)
+            return h
+
+        def add_folder(self, _name, **_kw):
+            return _Folder()
+
+        def add_button(self, name, **_kw):
+            h = _H()
+            self.buttons[name] = h
+            return h
+
+        def add_dropdown(self, _name, options=None, initial_value=None):
+            h = _H()
+            h.value = initial_value
+            h.options = list(options or [])
+            return h
+
+        def add_slider(self, _name, **kw):
+            return _H(**kw)
+
+        def add_number(self, _name, **kw):
+            return _H(**kw)
+
+        def add_text(self, _name, **kw):
+            h = _H(**kw)
+            h.value = kw.get("initial_value", "")
+            return h
+
+        def add_checkbox(self, _name, **kw):
+            return _H(**kw)
+
+    class _Srv:
+        def __init__(self):
+            self.gui = _Gui()
+
+    from soarm_sdk.dashboard.panels import calibration as C
+
+    ctx = _Ctx(cal, joint_ids=joint_ids)
+    ctx.bus = lambda *a, **k: contextlib.nullcontext(object())
+    ctx.state = types.SimpleNamespace(positions={}, connected=False)
+    ctx.lock = threading.Lock()
+    handles = {"status_md": [_H()]}
+    srv = _Srv()
+    C._build_rom(srv, ctx, handles)
+    return srv, ctx, handles
+
+
+def _recentred_wrist_roll_cal():
+    cal = _cal()
+    i = cal.names.index("wrist_roll")
+    cal.joints[i] = JointCalibration(
+        "wrist_roll", 2074.0, 1, 102, 3993, zero_source="manual_sign_flip"
+    )
+    return cal
+
+
+def test_recentre_button_exists_and_defaults_to_wrist_roll():
+    from soarm_sdk.dashboard.panels import calibration as C
+
+    cal = _recentred_wrist_roll_cal()
+    srv, _ctx, _handles = _build_rom_stub(cal)
+    assert "Recentre this joint" in srv.gui.buttons
+    src = inspect.getsource(C._build_recentre)
+    assert '"wrist_roll" if "wrist_roll"' in src
+
+
+def test_a_span_at_a_full_turn_is_refused_not_silently_applied(monkeypatch):
+    """The exact failure this arm's wrist_roll hit on the first real attempt:
+    stalled after 95 ticks one way, timed out after ~4010 the other."""
+    import soarm_sdk.calibration.recentre as recentre_mod
+
+    def fake_refuse(*_a, **_k):
+        raise RuntimeError(
+            "J5: measured 4105 ticks of travel, a full turn or more. A "
+            "continuously rotating joint has no centre to move to."
+        )
+
+    monkeypatch.setattr(recentre_mod, "recentre_joint", fake_refuse)
+
+    class _Word:
+        data = [1726]
+
+    class _FakeBus:
+        def read2ByteTxRx(self, _sid, _addr):
+            return _Word()
+
+    cal = _recentred_wrist_roll_cal()
+    before = cal.joints[cal.names.index("wrist_roll")]
+    srv, ctx, handles = _build_rom_stub(cal)
+    ctx.bus = lambda *a, **k: contextlib.nullcontext(_FakeBus())
+    srv.gui.buttons["Recentre this joint"]._click(None)
+
+    after = cal.joints[cal.names.index("wrist_roll")]
+    assert after == before, "a refused recentre must change nothing"
+    assert "refused" in handles["status_md"][0].content
+    result = next(h for h in srv.gui.markdowns if "4105" in h.content)
+    assert "torque off" in result.content
+    assert "by hand" in result.content
+
+
+def test_a_recentre_note_is_recorded_with_before_and_after(monkeypatch):
+    import soarm_sdk.calibration.recentre as recentre_mod
+
+    def fake_ok(_srv, _sid, **kw):
+        return {
+            "old_offset": 1726, "new_offset": -1832,
+            "angle_limits": [200, 4000], "span_ticks": 3800.0,
+            "position_after": 2048, "holding": True,
+            "stalled_both_ends": True,
+        }
+
+    monkeypatch.setattr(recentre_mod, "recentre_joint", fake_ok)
+
+    class _Word:
+        data = [1726]
+
+    class _FakeBus:
+        def read2ByteTxRx(self, _sid, _addr):
+            return _Word()
+
+    cal = _recentred_wrist_roll_cal()
+    srv, ctx, handles = _build_rom_stub(cal)
+    ctx.bus = lambda *a, **k: contextlib.nullcontext(_FakeBus())
+    srv.gui.buttons["Recentre this joint"]._click(None)
+
+    j = cal.joints[cal.names.index("wrist_roll")]
+    assert (j.tick_min, j.tick_max) == (200, 4000)
+    assert j.zero_source == "rebased_after_recentre"
+    # 2074 - (new_offset - old_offset) = 2074 - (-1832 - 1726) = 2074 + 3558
+    assert j.zero_offset_ticks == pytest.approx(5632.0)
+    assert cal.notes["rom_endpoint_samples"]["wrist_roll"][-1] == {
+        "min": 200, "max": 4000, "simulated": False,
+    }
+    assert "wrist_roll" in cal.notes["recentred"]
+    assert cal.notes["recentred"]["wrist_roll"]["old_offset"] == 1726
+    assert "re-pin it in tab 4" in handles["status_md"][0].content
+
+
+def test_recentre_does_not_touch_any_other_joint(monkeypatch):
+    import soarm_sdk.calibration.recentre as recentre_mod
+
+    def fake_ok(_srv, _sid, **kw):
+        return {
+            "old_offset": 1726, "new_offset": -1832,
+            "angle_limits": [200, 4000], "span_ticks": 3800.0,
+            "position_after": 2048, "holding": True,
+            "stalled_both_ends": True,
+        }
+
+    monkeypatch.setattr(recentre_mod, "recentre_joint", fake_ok)
+
+    class _Word:
+        data = [1726]
+
+    class _FakeBus:
+        def read2ByteTxRx(self, _sid, _addr):
+            return _Word()
+
+    cal = _recentred_wrist_roll_cal()
+    before = {
+        n: (j.tick_min, j.tick_max, j.zero_offset_ticks)
+        for n, j in zip(cal.names, cal.joints) if n != "wrist_roll"
+    }
+    srv, ctx, _handles = _build_rom_stub(cal)
+    ctx.bus = lambda *a, **k: contextlib.nullcontext(_FakeBus())
+    srv.gui.buttons["Recentre this joint"]._click(None)
+
+    after = {
+        n: (j.tick_min, j.tick_max, j.zero_offset_ticks)
+        for n, j in zip(cal.names, cal.joints) if n != "wrist_roll"
+    }
+    assert before == after

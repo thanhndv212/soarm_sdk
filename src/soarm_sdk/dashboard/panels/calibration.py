@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from ...calibration.frame import RobotCalibration, rezero_from_pose
+from ...protocol.registers import STS_OFS_L
 from ...calibration.pipeline import (
     AcceptanceTolerances,
     CalibrationPipeline,
@@ -888,6 +889,148 @@ def _build_rom(
             ),
         )
         _build_discard_pass(server, ctx, handles)
+        _build_recentre(server, ctx, handles)
+
+
+#: Default wheel-mode sweep parameters for the Recentre control. Separate
+#: constants from the Homing Wizard's own sweep-parameter fields (which
+#: drive a plain min/max sweep, not the unwrapped one) so changing one
+#: cannot silently change the other.
+RECENTRE_SPEED_TICKS_S = 150
+RECENTRE_STALL_THR_TICKS = 5
+RECENTRE_STALL_WIN_SAMPLES = 8
+RECENTRE_TIMEOUT_S = 30.0
+
+
+def _build_recentre(server: Any, ctx: Any, handles: Dict[str, Any]) -> None:
+    """Fix a joint whose travel straddles the encoder's 4095/0 wrap.
+
+    A plain ``(tick_min, tick_max)`` pair — the only shape this data model
+    has — can only describe a *contiguous* interval. A joint whose real
+    hard stops sit on either side of the wrap (this arm's ``wrist_roll``:
+    stops near tick 3974 and 3612, reachable through 0 the long way) cannot
+    be expressed that way at all: recording the two hard-stop ticks
+    directly and letting min/max sort them describes the narrow gap
+    *between* them — the part the mechanism does not reach — not the wide
+    range on either side that it does.
+
+    :func:`~soarm_sdk.calibration.recentre.recentre_joint` is the actual
+    fix: it drives the joint in wheel mode, accumulating *unwrapped*
+    displacement (a jump larger than half the encoder counts as a wrap, not
+    motion) to measure the true span regardless of where it sits, then
+    rewrites the servo's own EEPROM homing offset so that span becomes
+    contiguous within 0..4095. This control is the same operation
+    ``soarm-calibrate-rom --recentre`` performs, reached without leaving the
+    tab and without re-seeding the whole calibration from a fresh sweep.
+
+    This physically drives the servo to both hard stops. Collapsed, and
+    everything about it says so before the button does.
+    """
+    with server.gui.add_folder(
+        "Recentre a wrapped joint (drives the servo, rewrites EEPROM)",
+        expand_by_default=False,
+    ):
+        server.gui.add_markdown(
+            "For a joint whose travel crosses the encoder's 4095/0 wrap — "
+            "flagged above as *'travel crosses the 4095/0 wrap'*. Drives the "
+            "selected joint into **both** of its mechanical stops in wheel "
+            "mode. **Clear the workspace and support the arm before "
+            "pressing Recentre.**\n\n"
+            "Rewrites that joint's zero: any zero already pinned to it is "
+            "carried forward arithmetically, not re-verified — re-pin it "
+            "against a pose in tab 4 afterward."
+        )
+        joint_h = server.gui.add_dropdown(
+            "Joint", options=list(SOARM100_JOINT_NAMES),
+            initial_value="wrist_roll" if "wrist_roll" in SOARM100_JOINT_NAMES
+            else SOARM100_JOINT_NAMES[0],
+        )
+        result_md = server.gui.add_markdown("")
+        recentre_btn = server.gui.add_button("Recentre this joint", color="red")
+
+        @recentre_btn.on_click
+        def _recentre(_: Any) -> None:
+            from ...calibration.recentre import decode_ofs, recentre_joint
+
+            name = joint_h.value
+            sid = dict(zip(SOARM100_JOINT_NAMES, ctx.joint_ids)).get(name)
+            if sid is None:
+                return _say(handles, f"{name} has no servo id")
+            log_lines: List[str] = []
+            result_md.content = f"*Recentring {name}…*"
+            try:
+                with ctx.bus() as srv:
+                    old_raw = decode_ofs(srv.read2ByteTxRx(sid, STS_OFS_L).data[0])
+                    outcome = recentre_joint(
+                        srv, sid,
+                        speed=RECENTRE_SPEED_TICKS_S,
+                        stall_thr=RECENTRE_STALL_THR_TICKS,
+                        stall_win=RECENTRE_STALL_WIN_SAMPLES,
+                        timeout_s=RECENTRE_TIMEOUT_S,
+                        log_fn=log_lines.append,
+                    )
+            except RuntimeError as exc:
+                # The one failure recentre_joint raises on purpose: measured
+                # span >= a full turn, so there is no centre to move to. Seen
+                # on this arm's wrist_roll on the first attempt (stalled
+                # after only 95 ticks one way, timed out after ~4010 the
+                # other, span 4105) -- a stall that short is itself
+                # suspicious, and a direction that never stalls at all before
+                # a full turn is the sign this joint may not have two
+                # discrete stops the way this tool assumes. Recommending a
+                # retry with a longer timeout here would be guessing; the
+                # question is physical and belongs to whoever is at the arm.
+                result_md.content = (
+                    f"🔴 **{exc}**\n\n"
+                    + "\n".join(f"- {ln}" for ln in log_lines)
+                    + "\n\nBefore retrying: torque off and rotate the joint "
+                    "by hand through its full range. A stall within the "
+                    "first few hundred ticks may be a false trigger rather "
+                    "than a real stop; a direction that never stalls before "
+                    "a full turn may mean this joint has no second discrete "
+                    "stop at all (a cable-wrap limit rather than two hard "
+                    "stops), which this tool cannot centre."
+                )
+                return _say(handles, f"{name}: recentre refused — see the folder above")
+            except Exception as exc:
+                logger.exception("recentre failed")
+                return _say(handles, f"recentre failed: {exc}")
+
+            delta = outcome["new_offset"] - old_raw
+            new_min, new_max = outcome["angle_limits"]
+            for cal in _live_calibrations(ctx, handles):
+                idx = cal.names.index(name)
+                joint = cal.joints[idx].rebased_after_offset_change(delta)
+                cal.joints[idx] = joint.with_travel(new_min, new_max)
+                cal.notes = dict(cal.notes)
+                samples = dict(cal.notes.get("rom_endpoint_samples") or {})
+                samples[name] = list(samples.get(name, [])) + [
+                    {"min": new_min, "max": new_max, "simulated": False}
+                ]
+                cal.notes["rom_endpoint_samples"] = samples
+                cal.notes["recentred"] = {
+                    **dict(cal.notes.get("recentred") or {}),
+                    name: {
+                        "old_offset": outcome["old_offset"],
+                        "new_offset": outcome["new_offset"],
+                        "angle_limits": outcome["angle_limits"],
+                        "span_ticks": outcome["span_ticks"],
+                        "at": datetime.now(timezone.utc).isoformat(),
+                    },
+                }
+            handles.pop("pinned", None)
+            result_md.content = (
+                f"✅ **{name} recentred.** offset {outcome['old_offset']:+d} → "
+                f"{outcome['new_offset']:+d}, new travel {new_min}…{new_max} "
+                f"({outcome['span_ticks']:.0f} ticks).\n\n"
+                + "\n".join(f"- {ln}" for ln in log_lines)
+            )
+            _say(
+                handles,
+                f"{name} recentred — its zero was carried forward "
+                "arithmetically, not verified; re-pin it in tab 4, then "
+                "measure one more pass here for repeatability before saving",
+            )
 
 
 def _pass_label(index: int, entry: Dict[str, Any]) -> str:
