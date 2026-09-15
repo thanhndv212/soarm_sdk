@@ -1144,41 +1144,84 @@ class _MD:
         self.content = ""
 
 
-def test_a_refused_save_reports_beside_the_button_not_only_at_the_top():
-    """Save is at the bottom; its reply went only to the top of the tab.
+def test_an_incomplete_save_still_writes_and_says_so_beside_the_button():
+    """Save used to refuse outright unless every stage passed at once, so a
+    session that had genuinely finished tolerances, signs and travel still
+    lost all three the moment the dashboard restarted before zeros were
+    done — nothing had ever reached disk to survive the restart.
 
-    A refusal is five table rows naming what is still blocked, rendered
-    several screens above the button that produced it — so a refused save
-    looked exactly like a save that worked, and nothing reached disk.
+    The actual safety gate lives one layer downstream: TAMP's watchdog
+    re-derives full completeness from the file at plan time regardless of
+    what Save did, so refusing to persist an incomplete file was redundant
+    with that check and only cost already-verified work.
     """
     from soarm_sdk.dashboard.panels.calibration import _do_save
 
     cal = _cal()
-    cal.notes = {}  # nothing recorded: the pipeline cannot be ready
+    cal.notes = {}  # nothing recorded: the pipeline is not ready
     handles = {"status_md": [_MD()], "save_md": [_MD()]}
     _do_save(_Ctx(cal), handles)
 
-    assert "Not saved" in handles["save_md"][0].content
-    assert "BLOCKED" in handles["save_md"][0].content
+    assert "Saved" in handles["save_md"][0].content
+    assert "Still incomplete" in handles["save_md"][0].content
+    assert "watchdog will refuse to plan" in handles["save_md"][0].content
     assert handles["save_md"][0].content == handles["status_md"][0].content
 
 
-def test_a_refused_save_writes_nothing_at_all(tmp_path):
-    """Not even a backup: the readiness gate runs before the copy."""
+def test_an_incomplete_save_writes_to_disk_with_a_backup(tmp_path):
+    """This is exactly the behaviour a refusal used to prevent — deliberately,
+    now: an incomplete but genuine calibration should survive a restart."""
+    from soarm_sdk.calibration.frame import RobotCalibration
     from soarm_sdk.dashboard.panels.calibration import _do_save
 
     path = tmp_path / "calibration.json"
     saved = _cal()
     saved.notes = {}
     saved.save(path)
-    before = path.read_bytes()
 
-    ctx = _Ctx(saved)
+    cal = _cal()
+    cal.notes = {}
+    i = cal.names.index("shoulder_lift")
+    cal.joints[i] = cal.joints[i].shifted_by(0.05)  # a real, distinguishing edit
+    ctx = _Ctx(cal)
     ctx.calibration_path = path
     _do_save(ctx, {"status_md": [_MD()], "save_md": [_MD()]})
 
-    assert path.read_bytes() == before
-    assert list(tmp_path.glob("*.backup-*.json")) == []
+    reloaded = RobotCalibration.load(path)
+    assert reloaded.joints[i].zero_offset_ticks == cal.joints[i].zero_offset_ticks
+    assert list(tmp_path.glob("*.backup-*.json")), "previous version must still be backed up"
+
+
+def test_a_fully_complete_save_does_not_mention_incompleteness():
+    from soarm_sdk.calibration.pipeline import AcceptanceTolerances
+    from soarm_sdk.dashboard.panels.calibration import _do_save
+
+    cal = _cal()
+    cal.notes = {
+        "acceptance_tolerances": AcceptanceTolerances(
+            pose_repeatability_rad=math.radians(0.5),
+            model_deviation_rad=math.radians(2.0),
+            rom_endpoint_repeatability_ticks=8,
+        ).to_dict(),
+        "rom_endpoint_samples": {
+            n: [{"min": 10, "max": 4000}, {"min": 11, "max": 4001}] for n in cal.names
+        },
+        "rezeroed_from_dashboard": {
+            "pose": "folded_flat", "joints": ["shoulder_lift", "elbow_flex"],
+        },
+        "reference_pose_samples": [
+            {n: 2048 for n in cal.names}, {n: 2048 for n in cal.names},
+        ],
+    }
+    for i, j in enumerate(cal.joints):
+        if j.name not in ("shoulder_lift", "elbow_flex"):
+            cal.joints[i] = j.with_claim_withdrawn()
+    handles = {"status_md": [_MD()], "save_md": [_MD()]}
+    _do_save(_Ctx(cal), handles)
+
+    assert "Saved" in handles["save_md"][0].content
+    assert "incomplete" not in handles["save_md"][0].content.lower()
+    assert "every stage passes" in handles["save_md"][0].content
 
 
 def test_a_multiline_message_is_not_wrapped_in_emphasis():
@@ -1778,3 +1821,30 @@ def test_recentre_does_not_touch_any_other_joint(monkeypatch):
         for n, j in zip(cal.names, cal.joints) if n != "wrist_roll"
     }
     assert before == after
+
+
+def test_saving_with_no_explicit_path_never_reaches_the_real_default(tmp_path):
+    """The regression itself: _do_save used to refuse before ever computing
+    a path when incomplete, which accidentally hid that a context with no
+    calibration_path falls through to the real ~/.soarm_sdk/calibration.json.
+    Removing that refusal removed the accidental guard with it — this
+    asserts the *actual* guard (conftest.py's autouse fixture) is in
+    effect, not just its own bookkeeping."""
+    from pathlib import Path
+
+    from soarm_sdk.dashboard.fk import DEFAULT_CALIBRATION_PATH
+    from soarm_sdk.dashboard.panels.calibration import _do_save
+
+    assert str(tmp_path) in str(DEFAULT_CALIBRATION_PATH), (
+        "conftest.py should have redirected this for every test"
+    )
+    real = Path.home() / ".soarm_sdk" / "calibration.json"
+    before = real.stat().st_mtime if real.exists() else None
+
+    cal = _cal()
+    cal.notes = {}
+    _do_save(_Ctx(cal), {"status_md": [_MD()], "save_md": [_MD()]})
+
+    assert DEFAULT_CALIBRATION_PATH.exists()
+    after = real.stat().st_mtime if real.exists() else None
+    assert before == after, "the operator's real calibration file must not move"

@@ -609,10 +609,12 @@ def _tab_zeros(server: Any, ctx: Any, handles: Dict[str, Any],
 def _build_review(server: Any, ctx: Any, handles: Dict[str, Any], *, tab: str) -> None:
     """This tab's own result, the whole record, and Save — at the end of each tab.
 
-    Save writes the entire file and refuses while *any* row is blocked, so
-    the full record is shown next to it: a refusal here can be caused by a
-    tab you have not opened yet, and that has to be visible from where the
-    button is rather than inferred.
+    Save writes whatever is currently true, complete or not — a tab that
+    already passes should not lose its work because another tab is not
+    done yet, especially across a dashboard restart. The full record is
+    shown next to the button anyway, since TAMP's watchdog refuses to plan
+    against an incomplete file regardless of what Save allowed, and that
+    has to be visible from wherever Save is pressed, not just inferred.
     """
     with server.gui.add_folder("Review & save"):
         # Keyed by tab rather than through _set: each tab's rows differ, so
@@ -622,8 +624,9 @@ def _build_review(server: Any, ctx: Any, handles: Dict[str, Any], *, tab: str) -
         )
 
         server.gui.add_markdown(
-            "---\nFull record. **Save** refuses while any row is BLOCKED, "
-            "including other tabs'. Previous file is backed up first."
+            "---\nFull record. **Save** always writes what's here, even "
+            "partial — but TAMP will not plan against a file with any row "
+            "still BLOCKED. Previous file is backed up first."
         )
         _reg(handles, "pipeline_md", server.gui.add_markdown("*Waiting…*"))
         save_btn = server.gui.add_button("Save calibration", color="green")
@@ -1655,17 +1658,25 @@ def _cal_path(ctx: Any) -> Path:
 
 
 def _do_save(ctx: Any, handles: Dict[str, Any]) -> None:
+    """Write whatever is currently true in memory — complete or not.
+
+    This used to refuse outright unless every tab's stage passed at once,
+    which meant a session that had genuinely finished tolerances, signs and
+    travel still lost all three the moment the dashboard restarted before
+    zeros were done — nothing had ever reached disk to survive the restart.
+
+    The gate belonged one layer further downstream anyway: whether a
+    calibration is *safe to plan against* is TAMP's watchdog's question
+    (:func:`soarm_tamp.dashboard.panels.watchdog.watchdog_violations`), and
+    it already re-derives full pipeline completeness from the file at plan
+    time, independent of whatever Save did. Refusing to persist an
+    incomplete file was redundant with that check and cost only the
+    already-verified tabs' work when something interrupted the rest.
+    """
     cal: Optional[RobotCalibration] = getattr(ctx, "calibration", None)
     if cal is None:
         return _say_save(handles, "nothing to save")
     report = CalibrationPipeline(cal).report()
-    if not report.ready:
-        return _say_save(
-            handles,
-            "🔴 **Not saved.** Steps are still blocked — nothing was "
-            "written and the file on disk is untouched:\n\n"
-            + report.as_markdown(),
-        )
     path = _cal_path(ctx)
 
     # Every previous calibration on this arm was replaced in place, and the
@@ -1690,10 +1701,18 @@ def _do_save(ctx: Any, handles: Dict[str, Any]) -> None:
     handles["nudge_base"] = cal
     for h in handles.get("nudges", {}).values():
         h.value = 0.0
+    incomplete = [s.stage.value for s in report.stages if not s.passed]
     _say_save(
         handles,
         f"✅ **Saved** {path.name}"
-        + (f" (previous version backed up as {backup.name})" if backup else ""),
+        + (f" (previous version backed up as {backup.name})" if backup else "")
+        + (
+            f".\n\n⚠️ Still incomplete: {', '.join(incomplete)} — TAMP's "
+            "watchdog will refuse to plan against this file until they pass, "
+            "but what's done so far is safely on disk."
+            if incomplete
+            else " — every stage passes."
+        ),
     )
 
 
