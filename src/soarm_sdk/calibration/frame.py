@@ -55,7 +55,6 @@ __all__ = [
     "RobotCalibration",
     "rezero_from_pose",
     "seed_from_travel",
-    "seed_from_lerobot",
 ]
 
 # A span ratio this far from 1.0 means the measured travel and the URDF
@@ -602,43 +601,3 @@ def seed_from_travel(
             "next_step": "confirm signs and zero physically, then mark_validated()",
         },
     )
-
-
-def seed_from_lerobot(
-    calibration_json: str | Path,
-    urdf_limits: Dict[str, Tuple[float, float]],
-    *,
-    arm_id: Optional[str] = None,
-) -> RobotCalibration:
-    """Seed from a lerobot calibration file plus the URDF's joint limits.
-
-    Reads only ``range_min``/``range_max`` — the measured travel. The file's
-    ``homing_offset`` is deliberately **not** used: lerobot writes it into
-    the servo's EEPROM, so the ticks this SDK reads already have it applied,
-    and subtracting it again would double-count. ``drive_mode`` is likewise
-    lerobot's own convention, not a statement about the URDF.
-
-    Joint order follows *urdf_limits*, so the caller controls it rather than
-    inheriting whatever order the JSON happened to serialise in.
-    """
-    p = Path(calibration_json)
-    data = json.loads(p.read_text())
-    missing = [n for n in urdf_limits if n not in data]
-    if missing:
-        raise KeyError(f"{p.name} has no entry for: {', '.join(missing)}")
-
-    names = list(urdf_limits)
-    cal = seed_from_travel(
-        names=names,
-        urdf_limits=[urdf_limits[n] for n in names],
-        tick_ranges=[(data[n]["range_min"], data[n]["range_max"]) for n in names],
-        arm_id=arm_id or p.stem,
-        source=f"seeded from {p.name} travel ranges + URDF limits",
-    )
-    cal.notes["lerobot_file"] = str(p)
-    cal.notes["lerobot_drive_modes"] = {n: data[n].get("drive_mode") for n in names}
-    cal.notes["homing_offset_note"] = (
-        "not applied — lerobot writes it to servo EEPROM, so raw ticks "
-        "already include it"
-    )
-    return cal

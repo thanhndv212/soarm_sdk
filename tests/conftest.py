@@ -11,8 +11,8 @@ file with garbage.
 
 The fix is not "remember to set calibration_path in every test" — that is
 exactly the discipline that just failed, once, for real. Every test in this
-suite gets ``~/.soarm_sdk/calibration.json`` (and the two other modules that
-default-write to the same path) redirected to an isolated tmp directory
+suite gets ``~/.soarm_sdk/calibration.json`` (and the other module that
+default-writes to the same path) redirected to an isolated tmp directory
 automatically, whether the test knows to ask for it or not.
 """
 
@@ -25,14 +25,13 @@ import pytest
 def _no_real_calibration_file(tmp_path, monkeypatch):
     """Redirect every default calibration path to this test's own tmp_path.
 
-    Three modules independently default to
+    Two modules independently default to
     ``Path.home() / ".soarm_sdk" / "calibration.json"`` — the same
     duplicated-convention pattern this codebase has already been bitten by
-    once for direction signs. All three are patched here so a test that
-    relies on any of them lands in ``tmp_path``, never in the real file.
+    once for direction signs. Both are patched here so a test that
+    relies on either lands in ``tmp_path``, never in the real file.
     """
     fake = tmp_path / "calibration.json"
     monkeypatch.setattr("soarm_sdk.dashboard.fk.DEFAULT_CALIBRATION_PATH", fake)
     monkeypatch.setattr("soarm_sdk.calibration.sweep_cli.DEFAULT_OUT", fake)
-    monkeypatch.setattr("soarm_sdk.calibration.seed.DEFAULT_OUT", fake)
     yield fake

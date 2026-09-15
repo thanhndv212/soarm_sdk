@@ -17,7 +17,7 @@ soarm_sdk/
 ├── kinematics/   URDF loading + forward kinematics (no viewer dependency)
 ├── trajectory.py waypoint resampling for streaming to a robot
 ├── dashboard/    the Viser-based operator dashboard
-└── cli/          console-script entry points (soarm-calibrate, soarm-dashboard, ...)
+└── cli/          console-script entry points (soarm-reconfigure, soarm-dashboard-setup, ...)
 ```
 
 Every name importable from the flat top level in earlier releases
@@ -69,39 +69,36 @@ print("Servo model:", model)
 ## Examples
 
 The [`examples/`](examples/) folder hosts runnable utilities that rely on the
-package. For instance, the homing and calibration helper can be invoked from a
-fresh source checkout without installing the project:
+package, one launcher per console script, so any of them can be run from a
+fresh source checkout without installing the project. `reconfigure.py` sets
+up servos on the wire (IDs, EEPROM angle limits, speed); `calibrate_rom.py`
+drives each joint into its hard stops to measure travel and writes the arm's
+URDF-frame calibration — unrelated jobs, despite both once sharing the word
+"calibrate":
 
 ```bash
-python examples/calibrate.py --help
+python examples/reconfigure.py --scan-range 1-6
+python examples/calibrate_rom.py --arm-id <name>
 ```
 
-That launcher covers both calibration tools, which do unrelated jobs:
-`bus` sets up servos on the wire (IDs, EEPROM angle limits, speed), while
-`rom` drives each joint into its hard stops to measure travel and writes
-the arm's URDF-frame calibration.
-
-```bash
-python examples/calibrate.py bus --scan-range 1-6
-python examples/calibrate.py rom --arm-id <name>
-```
-
-The script automatically adds the local `src/` directory to `PYTHONPATH` when
-needed, so the command above works as long as it's run from the repository
+The scripts automatically add the local `src/` directory to `PYTHONPATH` when
+needed, so the commands above work as long as they're run from the repository
 root. Alternatively, install the package (for example with `pip install .`) and
-call the tool from anywhere.
+call the tools from anywhere.
 
 Launch the interactive text UI if you prefer guided prompts instead of CLI
 flags:
 
 ```bash
-python examples/calibrate.py bus --ui
+python examples/reconfigure.py --ui
 ```
 
 Prefer a full dashboard? Start the Viser-based interface:
 
 ```bash
-python examples/viser_dashboard.py
+python examples/setup_dashboard.py
+# or the guided calibration workflow:
+python examples/calibration_dashboard.py
 ```
 
 Optional arguments:
@@ -121,8 +118,8 @@ pip install soarm-sdk[viser]
 ```
 
 Installing the package also gives you these directly on `$PATH` — no
-checkout needed: `soarm-calibrate`, `soarm-calibrate --ui`,
-`soarm-dashboard`, `soarm-dashboard-setup`, `soarm-seed-calibration`.
+checkout needed: `soarm-reconfigure`, `soarm-reconfigure --ui`,
+`soarm-dashboard-setup`, `soarm-dashboard-calibration`, `soarm-calibrate-rom`.
 
 ## Features
 
@@ -207,16 +204,20 @@ directly only if you need register-level control):
 
 ---
 
-### Dashboard — `soarm-dashboard`
+### Dashboard — `soarm-dashboard-setup`
 
 A browser-based control panel built on [Viser](https://viser.studio) with
 real-time 3-D forward-kinematics visualisation. The server starts on
 `http://localhost:8080` by default.
 
 ```bash
-soarm-dashboard --device /dev/ttyUSB0
-# from a checkout without installing: python examples/viser_dashboard.py ...
+soarm-dashboard-setup --device /dev/ttyUSB0
+# from a checkout without installing: python examples/setup_dashboard.py ...
 ```
+
+`soarm-dashboard-calibration` is the other dashboard — the guided,
+four-step URDF-frame calibration and acceptance workflow — from
+`python examples/calibration_dashboard.py` when running from a checkout.
 
 The dashboard has 7 tabs:
 

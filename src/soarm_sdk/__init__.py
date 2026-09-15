@@ -9,7 +9,7 @@ Layout
 - :mod:`soarm_sdk.kinematics`  -- URDF loading + forward kinematics (no viewer dependency)
 - :mod:`soarm_sdk.trajectory`  -- waypoint resampling for streaming to a robot
 - :mod:`soarm_sdk.dashboard`   -- the Viser-based operator dashboard
-- :mod:`soarm_sdk.cli`         -- console-script entry points (``soarm-calibrate``, ...)
+- :mod:`soarm_sdk.cli`         -- console-script entry points (``soarm-reconfigure``, ...)
 
 This top-level module re-exports the names most applications need.
 Everything else is still reachable through its owning submodule.
@@ -108,7 +108,6 @@ from .calibration import (
     JointCalibration,
     RobotCalibration,
     seed_from_travel,
-    seed_from_lerobot,
 )
 
 # -- Trajectory: resampling for streaming to a robot -------------------------
@@ -186,7 +185,6 @@ __all__ = [
     "JointCalibration",
     "RobotCalibration",
     "seed_from_travel",
-    "seed_from_lerobot",
     # Trajectory
     "resample",
 ]

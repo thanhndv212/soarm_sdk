@@ -20,7 +20,7 @@ try:
 except ImportError:  # pragma: no cover -- guarded by URDF_AVAILABLE below
     trimesh = None  # type: ignore[assignment]
 
-#: Where soarm-calibrate-rom / soarm-seed-calibration write by default.
+#: Where soarm-calibrate-rom / soarm-dashboard-calibration write by default.
 DEFAULT_CALIBRATION_PATH = Path.home() / ".soarm_sdk" / "calibration.json"
 
 __all__ = [
@@ -177,7 +177,7 @@ def load_calibration(
         print(
             f"[soarm_sdk.dashboard] no calibration at {p} — the 3-D view will "
             "assume tick 2048 is zero for every joint and will not match the "
-            "real arm. Run soarm-calibrate-rom or soarm-seed-calibration."
+            "real arm. Run soarm-calibrate-rom or soarm-dashboard-calibration."
         )
         return None
     try:

@@ -17,6 +17,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them read as if it did. The module moved with it:
   `soarm_sdk.cli.calibrate` → `soarm_sdk.cli.reconfigure`.
 
+### Removed
+
+- **`soarm-seed-calibration`**, and `soarm_sdk.calibration.seed_from_lerobot`
+  it wrapped. Seeding a calibration from an existing lerobot calibration
+  file's travel ranges measures whatever produced that file, not this
+  arm — and it was never more than a rough, unvalidated starting point
+  regardless (direction signs still assumed, not measured). The one
+  remaining way to build a calibration is `soarm-calibrate-rom`, which
+  measures the arm's own hard stops, or the guided
+  `soarm-dashboard-calibration` workflow built on top of it. Existing
+  code that imported `seed_from_lerobot` directly has no replacement —
+  `seed_from_travel` (the generic function it thinly wrapped) is
+  unaffected.
+
 ### Added
 
 - **`soarm-dashboard-setup` now loads every tab** (Start Up, Homing Wizard,

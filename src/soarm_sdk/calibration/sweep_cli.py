@@ -5,13 +5,14 @@
 
 RUNS ON THE HOST, with the arm connected and free to move.
 
-``soarm-seed-calibration`` produces the same file offline, from an existing
-lerobot calibration's travel ranges. This one measures the travel itself:
-it drives every joint into both of its mechanical hard stops
+This measures the travel itself, rather than borrowing it from another
+tool's file: it drives every joint into both of its mechanical hard stops
 (:func:`~soarm_sdk.calibration.rom_sweep.run_rom_sweep`) and feeds the
-result to :func:`~soarm_sdk.calibration.frame.seed_from_travel`. Use it
-when there is no lerobot file to borrow from, when the arm has been
-re-assembled, or when the borrowed ranges are simply not trusted.
+result to :func:`~soarm_sdk.calibration.frame.seed_from_travel`. A borrowed
+travel range is a measurement of whatever produced that file, not of this
+arm, which is why there is no offline "seed from an existing calibration"
+path — only this sweep, or the guided ``soarm-dashboard-calibration``
+workflow that wraps it.
 
 Why the sweep is the honest starting point
 ------------------------------------------
