@@ -14,6 +14,7 @@ import pytest
 
 from soarm_sdk.conversions import RADS_PER_TICK
 from soarm_sdk.calibration.frame import (
+    JointCalibration,
     RobotCalibration,
     seed_from_lerobot,
     seed_from_travel,
@@ -312,3 +313,82 @@ def test_direction_signs_are_validated():
         seed_from_travel(["a"], [(-1.0, 1.0)], [(0, 100)], direction_signs=[1, 1])
     with pytest.raises(ValueError, match=r"\+1 or -1"):
         seed_from_travel(["a"], [(-1.0, 1.0)], [(0, 100)], direction_signs=[0])
+
+
+# -- EEPROM limit tracking ------------------------------------------------
+#
+# The gap this closes: wrist_flex's servo capped at 3046 ticks while the
+# calibration's travel said 3314, and nothing compared the two. These
+# fields let that comparison happen; see hardware.py's connect-time check
+# and conventions.phantom_range().
+
+
+def test_a_calibration_written_before_this_field_existed_loads_fine():
+    """Every calibration on disk before this session predates these fields.
+
+    ``RobotCalibration.load`` round-trips through ``JointCalibration(**j)``;
+    a JSON object missing the two ``eeprom_*`` keys must fall through to
+    their dataclass defaults rather than raising.
+    """
+    from soarm_sdk.calibration.frame import JointCalibration
+
+    j = JointCalibration(**{
+        "name": "wrist_flex", "zero_offset_ticks": 2487.0, "direction_sign": 1,
+        "tick_min": 1285, "tick_max": 3314,
+    })
+    assert j.eeprom_min_ticks is None
+    assert j.eeprom_max_ticks is None
+    assert j.eeprom_limits_ticks() is None
+    assert j.eeprom_recorded_at == ""
+
+
+def test_with_eeprom_limits_records_ticks_and_a_timestamp():
+    j = JointCalibration("wrist_flex", 2487.0, 1, 1285, 3314)
+    out = j.with_eeprom_limits(1050, 3546)
+    assert out.eeprom_limits_ticks() == (1050, 3546)
+    assert out.eeprom_recorded_at != ""
+    # travel and zero are untouched — this is a fact about the servo's
+    # firmware, independent of what the mechanism measures or means.
+    assert (out.tick_min, out.tick_max) == (1285, 3314)
+    assert out.zero_offset_ticks == 2487.0
+
+
+def test_with_eeprom_limits_orders_min_below_max_regardless_of_argument_order():
+    j = JointCalibration("a", 2048.0, 1, 0, 4095)
+    out = j.with_eeprom_limits(3546, 1050)  # swapped
+    assert out.eeprom_limits_ticks() == (1050, 3546)
+
+
+def test_eeprom_mismatch_is_none_when_never_recorded():
+    """A joint with no recorded EEPROM says nothing either way — the same
+    gate ``measured_is_trusted`` uses for travel acceptance."""
+    j = JointCalibration("a", 2048.0, 1, 0, 4095)
+    assert j.eeprom_mismatch(1050, 3546) is None
+
+
+def test_eeprom_mismatch_is_none_when_the_live_reading_agrees():
+    j = JointCalibration("a", 2048.0, 1, 0, 4095).with_eeprom_limits(1050, 3546)
+    assert j.eeprom_mismatch(1050, 3546) is None
+    # within the rounding tolerance
+    assert j.eeprom_mismatch(1051, 3545) is None
+
+
+def test_eeprom_mismatch_names_the_joint_and_both_readings():
+    """The exact bug this exists to catch: wrist_flex recorded 3314 but the
+    servo now reports 3046."""
+    j = JointCalibration("wrist_flex", 2487.0, 1, 1285, 3314).with_eeprom_limits(1050, 3314)
+    msg = j.eeprom_mismatch(1050, 3046)
+    assert msg is not None
+    assert "wrist_flex" in msg
+    assert "3314" in msg and "3046" in msg
+
+
+def test_eeprom_limits_survive_save_load_round_trip(tmp_path):
+    from soarm_sdk.calibration.frame import RobotCalibration
+
+    j = JointCalibration("wrist_flex", 2487.0, 1, 1285, 3546).with_eeprom_limits(1050, 3546)
+    cal = RobotCalibration(joints=[j], arm_id="thanh_arm")
+    path = cal.save(tmp_path / "cal.json")
+    back = RobotCalibration.load(path)
+    assert back.joints[0].eeprom_limits_ticks() == (1050, 3546)
+    assert back.joints[0].eeprom_recorded_at == j.eeprom_recorded_at

@@ -67,6 +67,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import (
     Callable,
+    Dict,
     Generator,
     List,
     Optional,
@@ -93,6 +94,8 @@ from ..rate_limiter import RateLimiter
 from ..protocol.sts import sts
 from ..protocol.registers import (
     COMM_SUCCESS,
+    STS_MAX_ANGLE_LIMIT_L,
+    STS_MIN_ANGLE_LIMIT_L,
     STS_CURRENT_MA_PER_LSB,
     STS_CURRENT_SIGN_BIT,
     STS_LOAD_PERCENT_PER_LSB,
@@ -194,6 +197,7 @@ class ServoHardwareInterface:
         joint_limits: Optional[tuple[Sequence[float], Sequence[float]]] = None,
         max_step_rad: Optional[float] = None,
         calibration: Optional["RobotCalibration"] = None,
+        verify_eeprom_limits: bool = True,
     ) -> None:
         self._port = port
         self._baud = baud
@@ -285,6 +289,8 @@ class ServoHardwareInterface:
         self._pending_torque: Optional[bool] = None
         self._torque_enabled: bool = torque_on_start
 
+        self._verify_eeprom_limits = verify_eeprom_limits
+
         self._thread: Optional[threading.Thread] = None
         self._running = False
         # Held by the bus thread for the duration of each tick's I/O, and by
@@ -326,6 +332,19 @@ class ServoHardwareInterface:
             self._read_once()
             if self._last_read_time > 0.0:
                 break
+
+        # A servo's MIN/MAX_ANGLE_LIMIT is enforced underneath every layer of
+        # software here and is never consulted by any of them — that gap is
+        # what let ``wrist_flex`` cap at +0.86 rad while the calibration, the
+        # planner and the servo's own commanded clamp all believed +1.27, with
+        # nothing anywhere to say so; the joint just stopped moving. Checking
+        # here, before torque is even enabled, means a disagreement is refused
+        # at connect time rather than discovered as a stalled joint mid-plan.
+        # Silent when nothing was ever recorded (every calibration written
+        # before this field existed) rather than blocking arms that have not
+        # opted in yet.
+        if self._verify_eeprom_limits and self._calibration is not None:
+            self._check_eeprom_limits()
 
         if self._torque_on_start:
             if self._last_read_time == 0.0:
@@ -597,6 +616,71 @@ class ServoHardwareInterface:
     # ------------------------------------------------------------------
     # Background state reader + writer
     # ------------------------------------------------------------------
+
+    def read_angle_limits(self) -> Dict[int, Tuple[int, int]]:
+        """Each servo's own MIN/MAX_ANGLE_LIMIT, in ticks, straight from EEPROM.
+
+        These are the limits the *firmware* enforces, and nothing else in
+        this stack reads them. That gap is not theoretical: measured on
+        thanh_arm, servo 4 (``wrist_flex``) caps at 3046 ticks while the
+        calibration recorded its travel as reaching 3314, so every layer
+        above believed in 0.41 rad of range the servo refuses to deliver.
+        A goal past the cap is accepted into GOAL_POSITION and then simply
+        not acted on — no error, no status flag, and no current draw, because
+        as far as the servo is concerned it is already where it was told to
+        be. The joint silently stops moving and the trajectory carries on
+        without it.
+
+        So: read them, and let callers intersect them with whatever else
+        they think the reachable set is.
+        """
+        out: Dict[int, Tuple[int, int]] = {}
+        with self.lend_bus() as srv:
+            for sid in self._joint_ids:
+                lo = srv.read2ByteTxRx(sid, STS_MIN_ANGLE_LIMIT_L)
+                hi = srv.read2ByteTxRx(sid, STS_MAX_ANGLE_LIMIT_L)
+                out[sid] = (
+                    lo.data[0] if lo.data else -1,
+                    hi.data[0] if hi.data else -1,
+                )
+        return out
+
+    def _check_eeprom_limits(self) -> None:
+        """Refuse to start if a servo's live EEPROM disagrees with what the
+        calibration recorded for it.
+
+        Only compares joints the calibration has actually recorded (see
+        :meth:`~soarm_sdk.calibration.frame.JointCalibration.eeprom_mismatch`)
+        — a calibration that has never run the recording step says nothing
+        either way, the same gate ``measured_is_trusted`` uses for travel
+        acceptance. This is deliberately a hard refusal, not a printed
+        warning: a mismatch here means some *other* command upstream (the
+        planner, ``effective_limits()``) is working from a window the servo
+        will not actually honor, silently, which is exactly what happened to
+        ``wrist_flex``. ``verify_eeprom_limits=False`` opts out — for the
+        tool that measures and re-records EEPROM limits in the first place,
+        which must be able to connect to a servo it is about to correct.
+        """
+        live = self.read_angle_limits()
+        problems = []
+        for sid, joint in zip(self._joint_ids, self._calibration.joints):
+            lo, hi = live.get(sid, (-1, -1))
+            if lo < 0 or hi < 0:
+                continue  # a failed read is state_age()'s problem, not this one
+            msg = joint.eeprom_mismatch(lo, hi)
+            if msg is not None:
+                problems.append(msg)
+        if problems:
+            raise RuntimeError(
+                "EEPROM angle limits have changed since this calibration "
+                "recorded them:\n  " + "\n  ".join(problems) + "\n"
+                "Every layer above the servo (planner bounds, "
+                "effective_limits()) is now working from a window the "
+                "firmware will not actually honor — a goal past it is "
+                "accepted and silently ignored, not clamped or refused. "
+                "Re-record with the EEPROM-limit tool, or construct with "
+                "verify_eeprom_limits=False if this is deliberate."
+            )
 
     def _read_loop(self) -> None:
         rate = RateLimiter(frequency=self._state_freq, warn=False)

@@ -90,6 +90,23 @@ class JointCalibration:
     #: says only that the URDF is conservative about travel.
     #: One of ``travel_and_urdf_limits``, ``reference_pose``, ``unknown``.
     zero_source: str = "unknown"
+    #: This servo's own MIN/MAX_ANGLE_LIMIT (EEPROM registers 9, 11), in raw
+    #: ticks, as last confirmed by :meth:`ServoHardwareInterface.read_angle_limits`.
+    #: ``None`` means never recorded — every calibration written before this
+    #: field existed, and the state that let ``wrist_flex`` cap at +0.86 rad
+    #: while every layer above believed +1.27, with nothing to catch it.
+    #: Recording this turns the firmware layer from an invisible fact into a
+    #: tracked one, the same way ``zero_source`` already tracks the zero's
+    #: provenance. See :meth:`with_eeprom_limits` and
+    #: ``docs/joint-limits-architecture.md`` for why this exists.
+    eeprom_min_ticks: Optional[int] = None
+    eeprom_max_ticks: Optional[int] = None
+    #: ISO timestamp of the read behind the two fields above. Empty means
+    #: never recorded, same gate as ``eeprom_min_ticks is None`` — kept
+    #: alongside it because "recorded once, arm reflashed since" is a real
+    #: failure mode :meth:`eeprom_limits_stale` exists to describe, and a
+    #: bare None can't distinguish "never checked" from "checked long ago".
+    eeprom_recorded_at: str = ""
 
     def to_rad(self, ticks: float) -> float:
         return self.direction_sign * (ticks - self.zero_offset_ticks) * RADS_PER_TICK
@@ -143,6 +160,52 @@ class JointCalibration:
         """
         lo, hi = int(min(tick_min, tick_max)), int(max(tick_min, tick_max))
         return replace(self, tick_min=lo, tick_max=hi)
+
+    def with_eeprom_limits(self, min_ticks: int, max_ticks: int) -> "JointCalibration":
+        """Copy recording this servo's own firmware angle limits.
+
+        Independent of :meth:`with_travel`: that records where the
+        *mechanism* stops, measured by driving to it. This records where the
+        *servo* refuses to go, read straight from EEPROM — a stricter bound
+        whenever the two disagree, and on this arm's ``wrist_flex`` and
+        (unresolved) ``elbow_flex`` they did.
+        """
+        lo, hi = int(min(min_ticks, max_ticks)), int(max(min_ticks, max_ticks))
+        return replace(
+            self,
+            eeprom_min_ticks=lo,
+            eeprom_max_ticks=hi,
+            eeprom_recorded_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    def eeprom_limits_ticks(self) -> Optional[Tuple[int, int]]:
+        """``(min, max)`` ticks last recorded from EEPROM, or ``None``."""
+        if self.eeprom_min_ticks is None or self.eeprom_max_ticks is None:
+            return None
+        return self.eeprom_min_ticks, self.eeprom_max_ticks
+
+    def eeprom_mismatch(
+        self, live_min_ticks: int, live_max_ticks: int, *, tolerance_ticks: int = 2
+    ) -> Optional[str]:
+        """Human-readable disagreement between the recorded and live EEPROM.
+
+        ``None`` when they agree (within *tolerance_ticks*, for rounding) or
+        when nothing was ever recorded — a caller decides separately whether
+        "never recorded" should itself block anything; this only speaks to
+        recorded-vs-live.
+        """
+        recorded = self.eeprom_limits_ticks()
+        if recorded is None:
+            return None
+        r_lo, r_hi = recorded
+        if abs(r_lo - live_min_ticks) <= tolerance_ticks and (
+            abs(r_hi - live_max_ticks) <= tolerance_ticks
+        ):
+            return None
+        return (
+            f"{self.name}: calibration recorded EEPROM ({r_lo}, {r_hi}) "
+            f"but the servo now reads ({live_min_ticks}, {live_max_ticks})"
+        )
 
     def with_claim_withdrawn(self) -> "JointCalibration":
         """Copy whose zero stops claiming a reference-pose witness.

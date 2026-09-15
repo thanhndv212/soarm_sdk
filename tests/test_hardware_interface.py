@@ -577,3 +577,81 @@ def test_re_enabling_torque_parks_first():
     # ... and the park precedes the torque-enable write
     assert hw.register_writes == [(1, STS_TORQUE_ENABLE, 1)]
     assert hw._torque_enabled is True
+
+
+# -- connect-time EEPROM verification -------------------------------------
+#
+# The check that would have caught wrist_flex's servo capping 0.41 rad
+# short of what the calibration and every layer above it believed.
+
+
+def _cal_with_eeprom(name, eeprom_min, eeprom_max, *, joint_ids=(1,)):
+    from soarm_sdk.calibration.frame import JointCalibration, RobotCalibration
+
+    joints = [
+        JointCalibration(name, 2048.0, 1, 0, 4095).with_eeprom_limits(
+            eeprom_min, eeprom_max
+        )
+        for _ in joint_ids
+    ]
+    return RobotCalibration(joints=joints, arm_id="test_arm")
+
+
+def test_check_eeprom_limits_passes_silently_when_they_agree():
+    cal = _cal_with_eeprom("wrist_flex", 1050, 3546)
+    hw = ServoHardwareInterface(
+        port="/dev/nonexistent", joint_ids=[4], calibration=cal
+    )
+    hw.read_angle_limits = lambda: {4: (1050, 3546)}
+
+    hw._check_eeprom_limits()  # must not raise
+
+
+def test_check_eeprom_limits_refuses_on_the_exact_wrist_flex_mismatch():
+    cal = _cal_with_eeprom("wrist_flex", 1050, 3314)  # recorded before the widen
+    hw = ServoHardwareInterface(
+        port="/dev/nonexistent", joint_ids=[4], calibration=cal
+    )
+    hw.read_angle_limits = lambda: {4: (1050, 3046)}  # the servo's actual cap
+
+    with pytest.raises(RuntimeError, match="wrist_flex"):
+        hw._check_eeprom_limits()
+
+
+def test_check_eeprom_limits_is_silent_when_nothing_was_ever_recorded():
+    """A calibration written before these fields existed — every real file
+    on disk before this session — must not block connecting."""
+    from soarm_sdk.calibration.frame import JointCalibration, RobotCalibration
+
+    cal = RobotCalibration(
+        joints=[JointCalibration("wrist_flex", 2487.0, 1, 1285, 3314)],
+    )
+    hw = ServoHardwareInterface(
+        port="/dev/nonexistent", joint_ids=[4], calibration=cal
+    )
+    hw.read_angle_limits = lambda: {4: (1050, 3046)}  # would mismatch, if checked
+
+    hw._check_eeprom_limits()  # must not raise — nothing was ever recorded
+
+
+def test_check_eeprom_limits_ignores_a_failed_read():
+    """(-1, -1) is read_angle_limits()'s own signal that the read failed —
+    state_age()'s problem, not a limits mismatch."""
+    cal = _cal_with_eeprom("wrist_flex", 1050, 3546)
+    hw = ServoHardwareInterface(
+        port="/dev/nonexistent", joint_ids=[4], calibration=cal
+    )
+    hw.read_angle_limits = lambda: {4: (-1, -1)}
+
+    hw._check_eeprom_limits()  # must not raise
+
+
+def test_verify_eeprom_limits_false_skips_the_check_entirely():
+    """The opt-out the widen tool itself needs: it must be able to connect
+    to a servo it is about to correct, before the correction exists."""
+    cal = _cal_with_eeprom("wrist_flex", 1050, 3314)
+    hw = ServoHardwareInterface(
+        port="/dev/nonexistent", joint_ids=[4], calibration=cal,
+        verify_eeprom_limits=False,
+    )
+    assert hw._verify_eeprom_limits is False

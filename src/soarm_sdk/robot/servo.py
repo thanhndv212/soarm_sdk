@@ -43,6 +43,7 @@ class ServoRobot(Robot):
         calibration: Optional["RobotCalibration"] = None,
         max_step_rad: Optional[float] = None,
         enforce_limits: bool = True,
+        verify_eeprom_limits: bool = True,
     ) -> None:
         cfg = config or load_robot_config("soarm100")
         super().__init__(cfg)
@@ -52,6 +53,7 @@ class ServoRobot(Robot):
         self._calibration = calibration
         self._max_step_rad = max_step_rad
         self._enforce_limits = enforce_limits
+        self._verify_eeprom_limits = verify_eeprom_limits
         self._hw: Optional[ServoHardwareInterface] = None
 
     # -- lifecycle -------------------------------------------------------
@@ -74,6 +76,7 @@ class ServoRobot(Robot):
             joint_limits=self.effective_joint_limits() if self._enforce_limits else None,
             max_step_rad=self._max_step_rad,
             calibration=self._calibration,
+            verify_eeprom_limits=self._verify_eeprom_limits,
         )
         self._hw.start()
 
