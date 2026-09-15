@@ -42,7 +42,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal
 
 import numpy as np
 
