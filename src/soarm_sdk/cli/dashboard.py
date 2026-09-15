@@ -1,18 +1,22 @@
 """Viser dashboard for soarm_sdk: robot control + real-time 3-D visualisation.
 
-Two entry points, sharing the same panel-building code:
+Three console scripts, one per :class:`~soarm_sdk.dashboard.app.DashboardProfile`
+in :data:`PROFILES`, sharing the same panel-building code:
 
-- :func:`main` (``soarm-dashboard``) — the full operator dashboard: Start
-  Up, Homing Wizard, Reconfigure, Command Panel, PID Tuning, Monitor,
-  Recorder.
-- :func:`main_setup` (``soarm-dashboard-setup``) — just the "bring a fresh
-  arm online" panels (Start Up, Homing Wizard, Reconfigure), for initial
-  hardware setup without the day-to-day operation tabs.
-- :func:`main_calibration` (``soarm-dashboard-calibration``) — the guided
-  URDF-frame calibration and acceptance workflow.
+- ``soarm-dashboard`` (:func:`main`, profile ``"full"``) — the full operator
+  dashboard: Start Up, Homing Wizard, Reconfigure, Command Panel, PID
+  Tuning, Monitor, Recorder.
+- ``soarm-dashboard-setup`` (:func:`main_setup`, profile ``"setup"``) — just
+  the "bring a fresh arm online" panels (Start Up, Homing Wizard,
+  Reconfigure), for initial hardware setup without the day-to-day
+  operation tabs.
+- ``soarm-dashboard-calibration`` (:func:`main_calibration`, profile
+  ``"calibration"``) — the guided URDF-frame calibration and acceptance
+  workflow.
 
 Built entirely on :mod:`soarm_sdk.dashboard` — add a new tab by writing a
-``build_*_panel()`` function there rather than forking this module.
+``build_*_panel()`` function there, or a new profile by adding an entry to
+``PROFILES``, rather than forking this module.
 
 Launch
 ------
@@ -25,10 +29,11 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 from .. import get_available_ports
 from ..dashboard import DashboardApp
+from ..dashboard.app import DashboardProfile
 from ..dashboard.panels import calibration, command, monitor, pid, recorder, setup
 
 # A URDF is workspace-relative (a sibling SO-ARM100/ checkout), not shipped
@@ -82,23 +87,7 @@ def _resolve_device(args: argparse.Namespace, label: str) -> str:
     return device
 
 
-def main(argv: Optional[list] = None) -> None:
-    """Full operator dashboard: setup + command + PID + monitor + recorder."""
-    parser = _build_parser("Viser dashboard for soarm_sdk")
-    args = parser.parse_args(argv)
-    device = _resolve_device(args, "soarm-dashboard")
-
-    app = DashboardApp(
-        title="soarm_sdk Dashboard",
-        port=args.port,
-        device=device,
-        baud=args.baud,
-        interval_ms=args.interval_ms,
-        urdf_path=args.urdf,
-        use_stream=args.stream,
-        calibration_path=args.calibration,
-    )
-
+def _register_full(app: DashboardApp) -> None:
     for panel in setup.build_all(fk_update_fn=app.fk_update):
         app.register(panel)
     app.register(command.build_command_panel())
@@ -106,51 +95,77 @@ def main(argv: Optional[list] = None) -> None:
     app.register(monitor.build_monitor_panel())
     app.register(recorder.build_recorder_panel())
 
-    app.run()
 
-
-def main_setup(argv: Optional[list] = None) -> None:
-    """Hardware-setup-only dashboard: Start Up, Homing Wizard, Reconfigure."""
-    parser = _build_parser("soarm_sdk hardware setup dashboard")
-    args = parser.parse_args(argv)
-    device = _resolve_device(args, "soarm-dashboard-setup")
-
-    app = DashboardApp(
-        title="soarm_sdk — Hardware Setup",
-        port=args.port,
-        device=device,
-        baud=args.baud,
-        interval_ms=args.interval_ms,
-        urdf_path=args.urdf,
-        use_stream=args.stream,
-        calibration_path=args.calibration,
-    )
+def _register_setup(app: DashboardApp) -> None:
     for panel in setup.build_all(fk_update_fn=app.fk_update):
         app.register(panel)
-    app.run()
 
 
-def main_calibration(argv: Optional[list] = None) -> None:
-    """Dedicated Viser workflow for ROM, zero, provenance, and acceptance."""
-    parser = _build_parser("soarm_sdk calibration dashboard")
-    args = parser.parse_args(argv)
-    device = _resolve_device(args, "soarm-dashboard-calibration")
-    app = DashboardApp(
-        title="soarm_sdk — Calibration",
-        port=args.port,
-        device=device,
-        baud=args.baud,
-        interval_ms=args.interval_ms,
-        urdf_path=args.urdf,
-        use_stream=args.stream,
-        calibration_path=args.calibration,
-    )
+def _register_calibration(app: DashboardApp) -> None:
     app.register(setup.build_startup_panel())
     for panel in calibration.build_calibration_panels(
         fk_update_fn=app.fk_update, ghost_fn=app.show_ghost
     ):
         app.register(panel)
+
+
+#: One entry per console script above. A new profile — say, a stripped-down
+#: field-ops dashboard — is a new key here plus a new thin ``main_*``, not a
+#: new hand-assembled panel list.
+PROFILES: Dict[str, DashboardProfile] = {
+    "full": DashboardProfile(
+        name="full",
+        title="soarm_sdk Dashboard",
+        register=_register_full,
+        description="Viser dashboard for soarm_sdk",
+    ),
+    "setup": DashboardProfile(
+        name="setup",
+        title="soarm_sdk — Hardware Setup",
+        register=_register_setup,
+        description="soarm_sdk hardware setup dashboard",
+    ),
+    "calibration": DashboardProfile(
+        name="calibration",
+        title="soarm_sdk — Calibration",
+        register=_register_calibration,
+        description="soarm_sdk calibration dashboard",
+    ),
+}
+
+
+def _launch(profile: DashboardProfile, argv: Optional[list], log_label: str) -> None:
+    parser = _build_parser(profile.description)
+    args = parser.parse_args(argv)
+    device = _resolve_device(args, log_label)
+
+    app = DashboardApp(
+        title=profile.title,
+        port=args.port,
+        device=device,
+        baud=args.baud,
+        interval_ms=args.interval_ms,
+        urdf_path=args.urdf,
+        use_stream=args.stream,
+        calibration_path=args.calibration,
+    )
+    profile.register(app)
     app.run()
+
+
+def main(argv: Optional[list] = None) -> None:
+    """Full operator dashboard: setup + command + PID + monitor + recorder."""
+    _launch(PROFILES["full"], argv, "soarm-dashboard")
+
+
+def main_setup(argv: Optional[list] = None) -> None:
+    """Hardware-setup-only dashboard: Start Up, Homing Wizard, Reconfigure."""
+    _launch(PROFILES["setup"], argv, "soarm-dashboard-setup")
+
+
+def main_calibration(argv: Optional[list] = None) -> None:
+    """Dedicated Viser workflow for ROM, zero, provenance, and acceptance."""
+    _launch(PROFILES["calibration"], argv, "soarm-dashboard-calibration")
 
 
 if __name__ == "__main__":

@@ -35,7 +35,7 @@ from .fk import (
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["Panel", "DashboardApp"]
+__all__ = ["Panel", "DashboardProfile", "DashboardApp"]
 
 
 @dataclass
@@ -55,6 +55,22 @@ class Panel:
     name: str
     build: Callable[["viser.ViserServer", DashboardContext], None]
     on_tick: Optional[Callable[[DashboardContext], None]] = None
+
+
+@dataclass
+class DashboardProfile:
+    """A named, reusable set of panels — what a console script (or a future
+    ``--profile`` flag) selects, in place of a hand-assembled panel list.
+
+    ``register`` runs once, right after the :class:`DashboardApp` exists —
+    not before — so it can hand panels ``app.fk_update`` / ``app.show_ghost``,
+    the same callbacks a caller assembling panels by hand would pass.
+    """
+
+    name: str
+    title: str
+    register: Callable[["DashboardApp"], None]
+    description: str = ""
 
 
 class DashboardApp:
