@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **PID auto-tuning** (`soarm_sdk.tuning`): step-response metrics (rise
+  time, overshoot, settling time, steady-state error, oscillation count,
+  peak current/temperature), fail-closed acceptance criteria mirroring
+  the calibration pipeline's `AcceptanceTolerances`/`CalibrationReport`
+  shape, a per-sample safety watchdog (current/temperature/oscillation
+  abort), and a bounded coordinate-descent search over (P, D, I) —
+  converge by cost, then verify the winner's repeatability before calling
+  it validated. The onboard STS3215 controller is a black box (fixed-point
+  gains, unknown internal update law), so this treats it as one rather
+  than modelling it or trying Ziegler-Nichols relay feedback. See
+  `docs/pid_autotune_plan.md` for the design and its deliberate
+  deviations. The dashboard's PID Tuning tab gained a Safety Limits
+  section (applied to the manual Step Response too) and an Auto-Tune
+  section (search bounds, acceptance criteria, live trial log, Restore
+  Pre-Tune Gains); every trial writes candidate gains to EEPROM to test
+  them for real, so EEPROM ends the run on the best gains found.
+
+- **`soarm-monitor`**, a read-only live Rerun telemetry viewer
+  (`soarm_sdk.monitoring`), and a matching `--rerun` flag on
+  `soarm-dashboard-setup`/`-calibration`. Two switchable Rerun layouts over
+  the entity-path convention `RerunSink` already writes to: one panel per
+  servo (channel swapped via Rerun's own entity/query editor — it has no
+  button/callback API to build a custom dropdown with), and one tab per
+  servo with a grid of one panel per channel. `--rerun` feeds the
+  dashboard's existing streaming interface into the same viewer instead of
+  opening a second connection, so every control (torque, joint commands,
+  scan, PID tuning) stays on the one connection Rerun also reads from.
+  `torque_on_start=False` always — a monitor must never energise the arm
+  just by watching it.
+
+### Fixed
+
+- **`read_gains`** (the PID Tuning tab's manual Read Gains button, now
+  also the auto-tuner) **unpacked `read1ByteTxRx`'s return value as a
+  3-tuple**; it is a `PacketResult` dataclass (`.data`/`.result`/`.error`),
+  so this raised `TypeError` on every real servo. Every other reader in
+  `soarm_sdk.protocol.sts` already went through `.data`/`.result` for this
+  reason. Caught before release by running the dashboard against real
+  hardware — the fake bus double in its test previously returned a plain
+  tuple, which is why the mismatch passed there.
+
+### Changed
+
+- **The dashboard's GUI panel controls are now wider**
+  (`configure_theme(control_layout="floating", control_width="large")`).
+  It never called `configure_theme` before, so it ran on Viser's default
+  medium width — cramped once the PID Tuning tab grew a Safety Limits +
+  Auto-Tune section on top of Step Response. Kept the panel floating
+  (Viser's own default) rather than switching to its fixed-sidebar layout,
+  since floating is the one that can still be dragged to a better spot on
+  screen — neither layout supported drag-*resize* on the Viser version this
+  was checked against, though a later Viser upgrade (1.1.1) added it.
+
 ### Changed
 
 - **`soarm-calibrate` renamed to `soarm-reconfigure`.** It has never
