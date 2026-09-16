@@ -75,6 +75,18 @@ def _build_parser(description: str) -> argparse.ArgumentParser:
         "every fifth poll, and the periodic 7 ms stall from twelve "
         "per-servo health reads goes away. Opt-in while it beds in.",
     )
+    parser.add_argument(
+        "--rerun",
+        action="store_true",
+        help="Also feed the streaming interface's telemetry to a spawned "
+        "Rerun viewer (soarm_sdk.monitoring.blueprint's by-servo/by-channel "
+        "layouts) — every control here (torque, joint commands, PID "
+        "tuning, scan) stays on this one connection; Rerun just gets a "
+        "second, independent subscription to its telemetry for better "
+        "multi-channel charts. Implies --stream (a second subscriber needs "
+        "a persistent interface to subscribe to). Needs the `telemetry` "
+        "extra: pip install soarm-sdk[telemetry].",
+    )
     return parser
 
 
@@ -129,6 +141,11 @@ def _launch(profile: DashboardProfile, argv: Optional[list], log_label: str) -> 
     args = parser.parse_args(argv)
     device = _resolve_device(args, log_label)
 
+    use_stream = args.stream
+    if args.rerun and not use_stream:
+        print(f"[{log_label}] --rerun implies --stream; enabling it.")
+        use_stream = True
+
     app = DashboardApp(
         title=profile.title,
         port=args.port,
@@ -136,7 +153,8 @@ def _launch(profile: DashboardProfile, argv: Optional[list], log_label: str) -> 
         baud=args.baud,
         interval_ms=args.interval_ms,
         urdf_path=args.urdf,
-        use_stream=args.stream,
+        use_stream=use_stream,
+        rerun=args.rerun,
         calibration_path=args.calibration,
     )
     profile.register(app)

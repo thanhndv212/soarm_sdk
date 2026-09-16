@@ -102,6 +102,7 @@ class DashboardApp:
         joint_ids: Optional[List[int]] = None,
         urdf_path: Optional[Path] = None,
         use_stream: bool = False,
+        rerun: bool = False,
         calibration_path: Optional[Path] = None,
     ) -> None:
         self.server = viser.ViserServer(port=port)
@@ -162,6 +163,7 @@ class DashboardApp:
             conn_status_md=conn_status_md,
             joint_ids=joint_ids if joint_ids is not None else list(SOARM100_IDS),
             use_stream=use_stream,
+            rerun=rerun,
         )
         # The 3-D view reads the calibration through the context rather than
         # off this object, so a panel can correct a bad zero and have the

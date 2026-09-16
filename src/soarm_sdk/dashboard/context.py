@@ -65,6 +65,7 @@ class DashboardContext:
         conn_status_md: Any,
         joint_ids: List[int],
         use_stream: bool = False,
+        rerun: bool = False,
     ) -> None:
         self.device_h = device_h
         self.baud_h = baud_h
@@ -88,6 +89,15 @@ class DashboardContext:
         self.use_stream = use_stream
         self._interface: Optional[Any] = None
         self._stream: Optional[Any] = None
+
+        # Optional: feed the same interface's telemetry to a Rerun viewer
+        # for its better multi-channel charts, while every control here
+        # (torque, joint commands, PID tuning, scan) stays on this one
+        # shared connection — see soarm_sdk.monitoring.blueprint. Requires
+        # use_stream, since the legacy poll loop never holds a persistent
+        # interface to subscribe a second consumer to.
+        self.rerun_enabled = rerun
+        self._rerun_recorder: Optional[Any] = None
 
         # Set by DashboardApp once the URDF and calibration are loaded. They
         # live here, not on the app, because the 3-D view and the Calibration
@@ -228,6 +238,12 @@ class DashboardContext:
         if self._poll_thread is not None and self._poll_thread.is_alive():
             self._poll_thread.join(timeout=3.0)
         self._poll_thread = None
+        if self._rerun_recorder is not None:
+            recorder, self._rerun_recorder = self._rerun_recorder, None
+            try:
+                recorder.stop()
+            except Exception:  # pragma: no cover - defensive teardown
+                pass
         if self._interface is not None:
             iface, self._interface = self._interface, None
             self._stream = None
@@ -275,10 +291,49 @@ class DashboardContext:
         t = threading.Thread(target=self._stream_loop, daemon=True)
         t.start()
         self._poll_thread = t
+
+        rerun_note = ""
+        if self.rerun_enabled:
+            rerun_note = self._start_rerun(iface)
+
         self.conn_status_md.content = (
             f"**Streaming** `{device}` @ {baud} baud "
-            f"({iface._state_freq:.0f} Hz)"
+            f"({iface._state_freq:.0f} Hz){rerun_note}"
         )
+
+    def _start_rerun(self, iface: Any) -> str:
+        """Attach a Rerun sink to *iface*'s telemetry stream.
+
+        A second, independent :meth:`subscribe` — the interface already
+        supports multiple simultaneous consumers, so this never competes
+        with the dashboard's own :meth:`_stream_loop` for samples. Failure
+        here is reported but never fatal: the dashboard's actual controls
+        (torque, joint commands, PID tuning) do not depend on Rerun, so a
+        missing ``rerun-sdk`` or a viewer that failed to launch should not
+        take those down too.
+
+        Returns a short suffix for the connection status line, empty on
+        success (the status line already says "Streaming"; failure is
+        worth calling out there too).
+        """
+        try:
+            import rerun as rr
+
+            from .fk import SOARM100_JOINT_NAMES
+            from ..monitoring.blueprint import build_monitor_blueprint
+            from ..robot.telemetry_sinks import RerunSink, TelemetryRecorder
+
+            joint_names = [SOARM100_JOINT_NAMES[i - 1] for i in self.joint_ids]
+            blueprint = build_monitor_blueprint(joint_names)
+            rr.init("soarm_dashboard", spawn=True, default_blueprint=blueprint)
+
+            recorder = TelemetryRecorder(iface, [RerunSink(joint_names=joint_names)])
+            recorder.start()
+            self._rerun_recorder = recorder
+            return " · Rerun viewer spawned"
+        except Exception as exc:
+            logger.warning("Rerun sink failed to start: %s", exc)
+            return f" · Rerun failed to start: {exc}"
 
     def _stream_loop(self) -> None:
         """Drain telemetry into ``self.state``. Never touches the serial port."""
