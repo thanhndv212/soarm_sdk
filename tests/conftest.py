@@ -34,4 +34,8 @@ def _no_real_calibration_file(tmp_path, monkeypatch):
     fake = tmp_path / "calibration.json"
     monkeypatch.setattr("soarm_sdk.dashboard.fk.DEFAULT_CALIBRATION_PATH", fake)
     monkeypatch.setattr("soarm_sdk.calibration.sweep_cli.DEFAULT_OUT", fake)
+    monkeypatch.setattr(
+        "soarm_sdk.tuning.provenance.DEFAULT_PROVENANCE_PATH",
+        tmp_path / "pid_tuning.json",
+    )
     yield fake
