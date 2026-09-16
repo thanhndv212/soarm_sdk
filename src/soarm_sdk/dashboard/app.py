@@ -105,6 +105,13 @@ class DashboardApp:
         calibration_path: Optional[Path] = None,
     ) -> None:
         self.server = viser.ViserServer(port=port)
+        # Neither viser layout supports free drag-resize (checked its
+        # frontend source: FloatingPanel.tsx / SidebarPanel.tsx both take a
+        # fixed width, no resize handle) — only the discrete control_width
+        # presets. "floating" (viser's own default) at least lets the panel
+        # be dragged to a better spot on screen; "large" gives labels like
+        # "Steady-state error max (ticks)" room instead of clipping.
+        self.server.gui.configure_theme(control_layout="floating", control_width="large")
         self.server.scene.world_axes.visible = True
         self.port = port
 
