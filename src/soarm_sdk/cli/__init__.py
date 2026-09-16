@@ -10,6 +10,10 @@ Installing the package (``pip install soarm-sdk``) provides these on
   PID, monitor, recorder.
 - ``soarm-dashboard-calibration`` — the guided, on-hardware tick<->URDF-frame
   calibration workflow.
+- ``soarm-monitor`` — read-only live Rerun telemetry viewer (position,
+  velocity, current, load, temperature, voltage) across several servos at
+  once. Needs the ``telemetry`` extra (``pip install soarm-sdk[telemetry]``);
+  every other script here works without it.
 
 Each also has a matching thin script under ``examples/`` for anyone
 running from a checkout without installing the package.
