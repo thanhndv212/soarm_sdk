@@ -272,5 +272,6 @@ def test_every_startup_control_borrows_the_bus_rather_than_reopening_it():
     code = re.sub(r"#.*", "", src)
     assert "discover_servos(" not in code, "scan must not open its own port"
     assert "scan_servos(" in code
-    # Each of the three bus-touching controls goes through the borrow.
-    assert src.count("with ctx.bus() as srv:") == 3
+    # Each of the four bus-touching controls (torque on/off, scan, home)
+    # goes through the borrow.
+    assert src.count("with ctx.bus() as srv:") == 4

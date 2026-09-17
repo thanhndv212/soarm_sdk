@@ -100,6 +100,20 @@ def _build_startup(server: Any, ctx: DashboardContext) -> None:
         scan_btn = server.gui.add_button("Scan", color="blue")
         scan_md = server.gui.add_markdown("*Press Scan to discover servos.*")
 
+    with server.gui.add_folder("Home"):
+        server.gui.add_markdown(
+            "Moves every joint to the **folded-flat** reference pose "
+            "(`soarm_sdk.calibration.reference.FOLDED_FLAT`: upper arm flat, "
+            "forearm folded back onto it) — the same pose the calibration "
+            "workflow uses as a physical reference. Useful to get a limp or "
+            "out-of-range arm (e.g. a joint just past its planning bound, "
+            "refusing a pose capture) back to a known, in-range position.\n\n"
+            "⚠ **Moves the arm.** Runs at a conservative fixed speed; clear "
+            "the workspace first."
+        )
+        home_btn = server.gui.add_button("Home (folded flat)", color="orange")
+        home_status_md = server.gui.add_markdown("")
+
     @connect_btn.on_click
     def _do_connect(_: Any) -> None:
         ctx.start_polling()
@@ -154,6 +168,52 @@ def _build_startup(server: Any, ctx: DashboardContext) -> None:
                 scan_md.content = "**No servos found** in the scanned range."
         except Exception as exc:
             scan_md.content = f"**Scan error**: {exc}"
+
+    @home_btn.on_click
+    def _do_home(_: Any) -> None:
+        if ctx.calibration is None:
+            home_status_md.content = (
+                "**No calibration loaded** — cannot compute tick targets "
+                "for a URDF-frame pose without one."
+            )
+            return
+        from ...calibration.reference import FOLDED_FLAT
+
+        if len(ctx.calibration.joints) != len(ctx.joint_ids):
+            home_status_md.content = (
+                f"**Calibration has {len(ctx.calibration.joints)} joint(s), "
+                f"expected {len(ctx.joint_ids)}** — refusing rather than "
+                "guessing which ticks map to which servo."
+            )
+            return
+
+        # Deliberately not gated on calibration.validated: this button
+        # exists to recover an arm that is stuck somewhere inconvenient
+        # (e.g. one joint just past a planning bound, as above), which is
+        # exactly the situation a freshly seeded, not-yet-validated
+        # calibration is most likely to be the only one available. A rough
+        # zero still gets every joint safely inside its declared range;
+        # planning and execution have their own, stricter validated checks.
+        try:
+            home_status_md.content = "*Homing…*"
+            ticks = ctx.calibration.rad_to_ticks(FOLDED_FLAT.q)
+            with ctx.bus() as srv:
+                for sid in ctx.joint_ids:
+                    write1(srv, sid, STS_TORQUE_ENABLE, 1, "torque on")
+                srv.groupSyncWrite.clearParam()
+                for sid, t in zip(ctx.joint_ids, ticks):
+                    # Conservative fixed speed/accel: the starting pose is
+                    # whatever the arm happens to be at, possibly a large
+                    # excursion away from folded-flat.
+                    srv.SyncWritePosEx(sid, int(round(t)), 200, 30)
+                srv.groupSyncWrite.txPacket()
+                srv.groupSyncWrite.clearParam()
+            home_status_md.content = (
+                "Homing to folded-flat — "
+                + ", ".join(f"J{sid}={int(round(t))}" for sid, t in zip(ctx.joint_ids, ticks))
+            )
+        except Exception as exc:
+            home_status_md.content = f"**Home error**: {exc}"
 
 
 def _run_rom_sweep_auto(
