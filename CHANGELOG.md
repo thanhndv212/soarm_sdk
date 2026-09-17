@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A Shutdown Dashboard button**, present on every dashboard by
+  construction (`DashboardApp.__init__` wires it unconditionally — no
+  per-dashboard opt-in, and no dashboard built on it can opt out).
+  Previously the only way to end a dashboard process was finding its PID
+  from a separate terminal. Stops polling and the Viser server, then ends
+  the process with `os._exit(0)` rather than `sys.exit()`, since the
+  button's callback runs on Viser's own callback thread, not the thread
+  blocked in `run()`'s loop — raising `SystemExit` there would only end
+  that one callback thread and leave the server (and the still-open
+  serial port) running.
+
+### Changed
+
+- **`soarm_sdk.cli.dashboard`'s parser/device-resolution/launch logic is
+  now public API** (`build_parser`, `resolve_device`, `resolve_use_stream`,
+  `launch`), parameterized on `default_urdf` and `default_use_stream`
+  rather than hardcoded to this package's own SO-ARM100 path and its own
+  opt-in `--stream` convention. Exists so a dashboard built outside this
+  package (`soarm_tamp`'s plan-and-run dashboard is the first) can register
+  its own `DashboardProfile` against this shared CLI instead of
+  maintaining a second, independently drifting copy of the same argument
+  definitions — which had already happened once: `soarm_tamp`'s hand-rolled
+  copy had no `--rerun` flag until one was ported over by hand.
+  `main_setup`/`main_calibration` are unchanged in behavior, now two-line
+  callers of `launch()`.
+
+### Added
+
 - **PID auto-tuning** (`soarm_sdk.tuning`): step-response metrics (rise
   time, overshoot, settling time, steady-state error, oscillation count,
   peak current/temperature), fail-closed acceptance criteria mirroring
