@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A Home button** on the Start Up tab, present on every dashboard by
+  construction (same shared panel as the Shutdown button). Moves every
+  joint to `soarm_sdk.calibration.reference.FOLDED_FLAT` via the arm's own
+  calibration — recovers an arm stuck somewhere inconvenient (e.g. one
+  joint just past its planning bound, refusing a pose capture) back to a
+  known, in-range pose. Not gated on `calibration.validated`, since that
+  is exactly the situation where only a rough, unvalidated calibration is
+  likely to be on hand.
+
 - **A Shutdown Dashboard button**, present on every dashboard by
   construction (`DashboardApp.__init__` wires it unconditionally — no
   per-dashboard opt-in, and no dashboard built on it can opt out).
