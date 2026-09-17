@@ -9,6 +9,7 @@ connection handling / bus access / background polling is written once.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -77,6 +78,23 @@ class DashboardApp:
     """Viser dashboard shell: server + shared sidebar/context + panel registry.
 
     Applications register :class:`Panel` instances; each becomes a tab.
+    Every dashboard built on this class — ``soarm-dashboard-setup``,
+    ``soarm-dashboard-calibration``, ``soarm_tamp``'s plan-and-run
+    dashboard, and any future one — gets two things for free, with no
+    per-dashboard wiring:
+
+    - A **Shutdown Dashboard** button in the sidebar, wired to
+      :meth:`_shutdown` (stop polling, stop the Viser server, end the
+      process). Present unconditionally; a caller cannot opt out of it.
+    - A **Rerun telemetry feed**, opt-in via the ``rerun=True`` constructor
+      argument (implies ``use_stream=True``): a second, independent
+      subscription to the same streaming interface's telemetry, fed to a
+      spawned Rerun viewer using
+      :func:`soarm_sdk.monitoring.blueprint.build_monitor_blueprint`'s
+      by-servo/by-channel layouts. A caller only needs to forward its own
+      ``--rerun`` flag to this constructor — see
+      ``soarm_sdk.cli.dashboard`` and ``soarm_tamp.dashboard.__main__``
+      for the two existing examples.
 
     Example
     -------
@@ -156,6 +174,10 @@ class DashboardApp:
         )
         conn_status_md = self.server.gui.add_markdown("*Not connected.*")
 
+        self.server.gui.add_markdown("---")
+        shutdown_btn = self.server.gui.add_button("Shutdown Dashboard", color="red")
+        shutdown_btn.on_click(self._shutdown)
+
         self.ctx = DashboardContext(
             device_h=device_h,
             baud_h=baud_h,
@@ -187,6 +209,27 @@ class DashboardApp:
         """Register a panel; returns ``self`` so calls can be chained."""
         self._panels.append(panel)
         return self
+
+    def _shutdown(self, _: object = None) -> None:
+        """Stop polling, stop the Viser server, then end the process.
+
+        A GUI button's callback runs on Viser's own callback thread, not
+        the thread blocked in :meth:`run`'s loop — raising ``SystemExit``
+        here would only end that one callback thread, leaving the server
+        (and the still-open serial port) running. ``os._exit`` ends the
+        whole process immediately from any thread, which is what a
+        "shut down the app" button actually needs to do.
+        """
+        print("[soarm_sdk.dashboard] Shutdown requested from the GUI.")
+        try:
+            self.ctx.stop_polling()
+        except Exception:
+            logger.exception("stop_polling failed during shutdown")
+        try:
+            self.server.stop()
+        except Exception:
+            logger.exception("server.stop failed during shutdown")
+        os._exit(0)
 
     def fk_update(self, positions: Dict[int, int]) -> None:
         """Push *positions* (servo_id -> ticks) through FK to the 3-D scene.
