@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`soarm_sdk.dynamics`: dynamic (gravity + friction) identification
+  support**, and a **`soarm-identify-record`** console script. The fit runs
+  in FIGAROH (`figaroh-examples/examples/so101/`, pinocchio in conda); this
+  covers the two ends that live next to the arm:
+  - `fourier_excitation` / `ExcitationSpec` — slow, smooth, band-limited
+    multi-joint excitation that starts and ends at rest, amplitude-scaled to
+    a peak joint speed (0.5 rad/s default) and kept a margin inside the
+    effective joint limits.
+  - `record_excitation` — streams it through any `RobotInterface`, recording
+    from the bus thread's telemetry tap when the robot has one (a connected
+    `ServoRobot`) and polling otherwise. Aborts, keeping the partial log, on
+    a tracking error or over-current. The `dq` hint it sends is a speed cap
+    with headroom and a floor, not the plan's own velocity: `ServoRobot`
+    writes `|dq|` into GOAL_SPEED, so the plan's velocity would cap every
+    servo at exactly the planned speed and near-stall it at each reversal.
+  - `IdentificationLog` — the on-disk contract (`soarm_sdk.dynamics.log/v1`:
+    CSVs + `meta.json`). Velocity, current and load are multiplied by the
+    calibration's direction sign on the way in: the servo reports them in
+    its **motor** direction while positions are already URDF-frame, so on
+    `wrist_roll` (sign -1) the raw current opposes the URDF torque.
+  - `GravityModel` — generalized gravity from a URDF in pure numpy (matches
+    `pinocchio.computeGeneralizedGravity` to 1e-15 on the SO-101), with
+    identified per-body mass/first-moment overrides and a coarse
+    link-origin clearance check the CLI runs over the whole plan.
+  - `IdentifiedDynamics` — loads the `soarm_sdk.dynamics.identified/v1`
+    YAML FIGAROH's `update_model.py` writes and evaluates gravity, friction
+    and offset torque, and the servo reading they imply.
+
 - **A Home button** on the Start Up tab, present on every dashboard by
   construction (same shared panel as the Shutdown button). Moves every
   joint to `soarm_sdk.calibration.reference.FOLDED_FLAT` via the arm's own

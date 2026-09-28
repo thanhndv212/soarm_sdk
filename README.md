@@ -15,6 +15,7 @@ soarm_sdk/
 ├── robot/        RobotInterface / Robot abstraction + backends (ServoRobot, NullRobot)
 ├── calibration/  tick <-> URDF-frame mapping (measurement, seeding, storage)
 ├── kinematics/   URDF loading + forward kinematics (no viewer dependency)
+├── dynamics/     identification excitation + logging, numpy gravity model, identified dynamics
 ├── trajectory.py waypoint resampling for streaming to a robot
 ├── dashboard/    the Viser-based operator dashboard
 └── cli/          console-script entry points (soarm-reconfigure, soarm-dashboard-setup, ...)
@@ -119,7 +120,8 @@ pip install soarm-sdk[viser]
 
 Installing the package also gives you these directly on `$PATH` — no
 checkout needed: `soarm-reconfigure`, `soarm-reconfigure --ui`,
-`soarm-dashboard-setup`, `soarm-dashboard-calibration`, `soarm-calibrate-rom`.
+`soarm-dashboard-setup`, `soarm-dashboard-calibration`, `soarm-calibrate-rom`,
+`soarm-identify-record`.
 
 ## Features
 
@@ -201,6 +203,41 @@ directly only if you need register-level control):
 - Declared joint limits and the per-step bound are enforced on every write, and
   clamps are counted (`limit_clamps`, `step_clamps`) rather than failing
   silently.
+
+---
+
+### Dynamics — `soarm_sdk.dynamics`, `soarm-identify-record`
+
+Gravity + friction identification, and using the result. The fit itself runs
+in [FIGAROH](https://github.com/thanhndv212/figaroh-examples/tree/main/examples/so101)
+(pinocchio, conda); this package covers the two ends that live next to the arm.
+
+```bash
+# Record a slow excitation: joint angles, velocity, servo current and load,
+# all in the URDF joint frame. Needs a validated calibration.
+soarm-identify-record --arm-id my_arm --out runs/ident01
+soarm-identify-record --dry-run --out runs/dry      # plan + write, no hardware
+```
+
+```python
+from soarm_sdk.dynamics import GravityModel, IdentifiedDynamics
+
+# Pure-numpy generalized gravity from a URDF (matches pinocchio's
+# computeGeneralizedGravity), e.g. with the CAD masses:
+g = GravityModel.from_urdf(urdf, joint_names).torque(q)
+
+# Or with identified masses, friction and offsets (written by FIGAROH's
+# examples/so101/update_model.py):
+dyn = IdentifiedDynamics.load("so101_dynamics.yaml", urdf=urdf)
+tau = dyn.torque(q_arm, dq_arm, deadband_rad_s=0.05)   # N·m, URDF frame
+i_expected = dyn.to_signal(tau)                        # servo current, mA
+```
+
+The recorder checks the whole planned motion against the URDF (every
+link-frame origin above `--min-height`), stays `--margin` inside the effective
+joint limits, and stops the run — keeping what it recorded — if a joint lags
+its command by more than `--abort-tracking` rad or draws more than
+`--abort-current` mA.
 
 ---
 
